@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Repo root (or current dir)
+if git rev-parse --show-toplevel >/dev/null 2>&1; then
+  ROOT="$(git rev-parse --show-toplevel)"
+else
+  ROOT="$PWD"
+fi
+ROOT="$(realpath "$ROOT")"
+
+BASE="$(basename "$ROOT")"
+HASH="$(printf '%s' "$ROOT" | { sha1sum 2>/dev/null || shasum -a 1; } | awk '{print $1}' | cut -c1-10)"
+
+# Unique per invocation so multiple can run simultaneously
+STAMP="$(date +%Y%m%d-%H%M%S)"
+NAME="codex-${BASE}-${HASH}-${STAMP}-$$"
+
+# Ensure host-side auth/config files exist
+mkdir -p "$HOME/.codex"
+touch "$HOME/.codex/auth.json"
+touch "$HOME/.codex/config.toml"
+
+# Repo-local writable paths so codex's internal sandbox can use uv/pytest without overrides.
+WORKSPACE_CACHE_DIR="$ROOT/.cache"
+WORKSPACE_STATE_DIR="$ROOT/.local/state"
+WORKSPACE_UV_CACHE_DIR="$ROOT/.uv-cache"
+WORKSPACE_UV_PYTHON_DIR="$ROOT/.uv-python"
+WORKSPACE_VENV_DIR="$ROOT/.venv"
+WORKSPACE_PYTEST_CACHE_DIR="$ROOT/.pytest_cache"
+
+mkdir -p \
+  "$WORKSPACE_CACHE_DIR" \
+  "$WORKSPACE_STATE_DIR" \
+  "$WORKSPACE_UV_CACHE_DIR" \
+  "$WORKSPACE_UV_PYTHON_DIR" \
+  "$WORKSPACE_VENV_DIR" \
+  "$WORKSPACE_PYTEST_CACHE_DIR"
+
+# Build flags — container IS the sandbox, so bypass codex's internal one
+CODEX_FLAGS=()
+if [[ "${CODEX_SAFE_MODE:-0}" != "1" ]]; then
+  CODEX_FLAGS+=(--dangerously-bypass-approvals-and-sandbox)
+fi
+
+# OpenAI auth: forward API key
+OPENAI_OPTS=()
+if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+  OPENAI_OPTS+=(-e "OPENAI_API_KEY=$OPENAI_API_KEY")
+fi
+
+# GitHub CLI: forward token env var and/or host config
+GH_OPTS=()
+if [[ -n "${GH_TOKEN:-}" ]]; then
+  GH_OPTS+=(-e "GH_TOKEN=$GH_TOKEN")
+elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  GH_OPTS+=(-e "GITHUB_TOKEN=$GITHUB_TOKEN")
+fi
+GH_HOST_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
+if [[ -d "$GH_HOST_CONFIG" ]]; then
+  GH_OPTS+=(-v "$GH_HOST_CONFIG":/home/codex/.config/gh:ro,nosuid,nodev,z)
+fi
+
+IMAGE="${CODEX_IMAGE:-codex-uv:latest}"
+if ! podman image exists "$IMAGE" 2>/dev/null; then
+  echo "Error: Image '$IMAGE' not found. Build it first with:" >&2
+  echo "  bin/build-containers codex" >&2
+  exit 1
+fi
+
+exec podman run --rm -it --pull=never \
+  --name "$NAME" \
+  --userns=keep-id \
+  --passwd-entry "codex:x:\$UID:\$GID:Codex:/home/codex:/bin/bash" \
+  --cap-drop=all \
+  --security-opt no-new-privileges \
+  --read-only \
+  --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+  --tmpfs /home/codex:rw,nosuid,nodev,size=256m \
+  --tmpfs /uv-bin:rw,nosuid,nodev,size=128m \
+  --tmpfs /uv-tools:rw,nosuid,nodev,size=256m \
+  --label "io.codex.repo=$ROOT" \
+  --label "io.codex.repo_hash=$HASH" \
+  --label "io.codex.session=$STAMP-$$" \
+  -e HOME=/home/codex \
+  -e TERM="${TERM:-xterm-256color}" \
+  -e COLORTERM="${COLORTERM:-truecolor}" \
+  -e XDG_CACHE_HOME="$WORKSPACE_CACHE_DIR" \
+  -e XDG_STATE_HOME="$WORKSPACE_STATE_DIR" \
+  -e UV_CACHE_DIR="$WORKSPACE_UV_CACHE_DIR" \
+  -e UV_PYTHON_INSTALL_DIR="$WORKSPACE_UV_PYTHON_DIR" \
+  -e UV_PROJECT_ENVIRONMENT="$WORKSPACE_VENV_DIR" \
+  -e PYTEST_ADDOPTS="${PYTEST_ADDOPTS:-} -o cache_dir=$WORKSPACE_PYTEST_CACHE_DIR" \
+  "${OPENAI_OPTS[@]}" \
+  "${GH_OPTS[@]}" \
+  -v "$ROOT":"$ROOT":nosuid,nodev,z \
+  -v "$HOME/.codex":/home/codex/.codex:nosuid,nodev,noexec,z \
+  -w "$ROOT" \
+  "$IMAGE" \
+  "${CODEX_FLAGS[@]}" \
+  "$@"

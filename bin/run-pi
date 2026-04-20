@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Repo root (or current dir)
+if git rev-parse --show-toplevel >/dev/null 2>&1; then
+  ROOT="$(git rev-parse --show-toplevel)"
+else
+  ROOT="$PWD"
+fi
+ROOT="$(realpath "$ROOT")"
+
+BASE="$(basename "$ROOT")"
+HASH="$(printf '%s' "$ROOT" | { sha1sum 2>/dev/null || shasum -a 1; } | awk '{print $1}' | cut -c1-10)"
+
+# Unique per invocation so multiple can run simultaneously
+STAMP="$(date +%Y%m%d-%H%M%S)"
+NAME="pi-${BASE}-${HASH}-${STAMP}-$$"
+
+# Ensure host-side config dir exists
+mkdir -p "$HOME/.pi/agent"
+
+# Per-repo state dirs
+CACHE_BASE="${XDG_CACHE_HOME:-$HOME/.cache}/claude-podman"
+STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/claude-podman"
+
+PI_DIR="${STATE_BASE}/pi/${HASH}"
+UV_CACHE="${CACHE_BASE}/uv/${HASH}"
+VENV_DIR="${STATE_BASE}/venvs/${HASH}/${STAMP}-$$"
+PROJECT_MODELS="$ROOT/.pi/agent/models.json"
+
+mkdir -p "$PI_DIR" "$UV_CACHE" "$VENV_DIR"
+
+# Allow repo-local custom model definitions to override the container's models.json
+# while keeping auth, sessions, and other mutable pi state in the host state dir.
+MODEL_OPTS=()
+if [[ -f "$PROJECT_MODELS" ]]; then
+  MODEL_OPTS+=(-v "$PROJECT_MODELS":/home/sb/.pi/agent/models.json:nosuid,nodev,z)
+fi
+
+# Prune venv dirs older than 7 days
+find "${STATE_BASE}/venvs/${HASH}" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+
+# Forward API keys and editor preferences that pi reads
+PI_OPTS=()
+for var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY TOGETHER_API_KEY PI_CODING_AGENT_DIR PI_TELEMETRY PI_CACHE_RETENTION PI_SKIP_VERSION_CHECK VISUAL EDITOR; do
+  if [[ -n "${!var:-}" ]]; then
+    PI_OPTS+=(-e "${var}=${!var}")
+  fi
+done
+
+# GitHub CLI: forward token env var and/or host config
+GH_OPTS=()
+if [[ -n "${GH_TOKEN:-}" ]]; then
+  GH_OPTS+=(-e "GH_TOKEN=$GH_TOKEN")
+elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  GH_OPTS+=(-e "GITHUB_TOKEN=$GITHUB_TOKEN")
+fi
+GH_HOST_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
+if [[ -d "$GH_HOST_CONFIG" ]]; then
+  GH_OPTS+=(-v "$GH_HOST_CONFIG":/home/sb/.config/gh:ro,nosuid,nodev,z)
+fi
+
+exec podman run --rm -it --pull=never \
+  --name "$NAME" \
+  --userns=keep-id \
+  --passwd-entry "sb:x:\$UID:\$GID:sb:/home/sb:/bin/bash" \
+  --cap-drop=all \
+  --security-opt no-new-privileges \
+  --read-only \
+  --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+  --tmpfs /home/sb:rw,nosuid,nodev,size=256m \
+  --tmpfs /uv-bin:rw,nosuid,nodev,size=128m \
+  --tmpfs /uv-tools:rw,nosuid,nodev,size=256m \
+  --label "io.pi.repo=$ROOT" \
+  --label "io.pi.repo_hash=$HASH" \
+  --label "io.pi.session=$STAMP-$$" \
+  -e HOME=/home/sb \
+  -e TERM="${TERM:-xterm-256color}" \
+  -e COLORTERM="${COLORTERM:-truecolor}" \
+  -e UV_CACHE_DIR=/uv-cache \
+  -e UV_PROJECT_ENVIRONMENT=/venv \
+  "${PI_OPTS[@]}" \
+  "${GH_OPTS[@]}" \
+  -v "$ROOT":"$ROOT":nosuid,nodev,z \
+  -v "$PI_DIR":/home/sb/.pi/agent:nosuid,nodev,z \
+  "${MODEL_OPTS[@]}" \
+  -v "$UV_CACHE":/uv-cache:nosuid,nodev,z \
+  -v "$VENV_DIR":/venv:nosuid,nodev,z \
+  -w "$ROOT" \
+  "${PI_IMAGE:-pi-uv:latest}" \
+  "$@"

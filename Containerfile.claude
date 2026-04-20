@@ -1,0 +1,14 @@
+ARG BASE_IMAGE=localhost/aisb-base:latest
+FROM ${BASE_IMAGE}
+
+ARG CLAUDE_VERSION=unknown
+RUN echo "claude-code cache key: ${CLAUDE_VERSION}" \
+ && bash -lc 'set -euo pipefail; \
+      export HOME=/opt/claude-staging; \
+      export PATH="$HOME/.local/bin:$PATH"; \
+      mkdir -p "$HOME"; \
+      curl -fsSL https://claude.ai/install.sh | bash; \
+      install -m 0755 "$(readlink -f "$HOME/.local/bin/claude")" /usr/local/bin/claude; \
+      rm -rf /opt/claude-staging'
+
+ENTRYPOINT ["claude"]

@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Generic sandboxed runner. Executes an arbitrary command inside the
+# aisb-base container with the same hardening as run-pi/run-claude/run-codex,
+# minus any agent-specific state mounts. Network is enabled.
+#
+# Usage:
+#   run-sb                       # interactive bash
+#   run-sb uv run script.py
+#   run-sb python3 -c 'print(1)'
+#
+# Env:
+#   SB_IMAGE       override image tag (default: localhost/aisb-base:latest)
+
+if git rev-parse --show-toplevel >/dev/null 2>&1; then
+  ROOT="$(git rev-parse --show-toplevel)"
+else
+  ROOT="$PWD"
+fi
+ROOT="$(realpath "$ROOT")"
+
+BASE="$(basename "$ROOT")"
+HASH="$(printf '%s' "$ROOT" | { sha1sum 2>/dev/null || shasum -a 1; } | awk '{print $1}' | cut -c1-10)"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+NAME="sb-${BASE}-${HASH}-${STAMP}-$$"
+
+CACHE_BASE="${XDG_CACHE_HOME:-$HOME/.cache}/claude-podman"
+STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/claude-podman"
+UV_CACHE="${CACHE_BASE}/uv/${HASH}"
+UV_PYTHON_DIR="${STATE_BASE}/uv-python/${HASH}"
+VENV_DIR="${STATE_BASE}/venvs/${HASH}/${STAMP}-$$"
+mkdir -p "$UV_CACHE" "$UV_PYTHON_DIR" "$VENV_DIR"
+
+# Prune per-invocation venv dirs older than 7 days
+find "${STATE_BASE}/venvs/${HASH}" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+
+# Forward common API keys + editor prefs
+ENV_OPTS=()
+for var in \
+    ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY \
+    OPENROUTER_API_KEY TOGETHER_API_KEY GROQ_API_KEY \
+    HF_TOKEN QWEN_MODEL \
+    VISUAL EDITOR; do
+  if [[ -n "${!var:-}" ]]; then
+    ENV_OPTS+=(-e "${var}=${!var}")
+  fi
+done
+
+# GitHub CLI passthrough
+GH_OPTS=()
+if [[ -n "${GH_TOKEN:-}" ]]; then
+  GH_OPTS+=(-e "GH_TOKEN=$GH_TOKEN")
+elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  GH_OPTS+=(-e "GITHUB_TOKEN=$GITHUB_TOKEN")
+fi
+GH_HOST_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
+if [[ -d "$GH_HOST_CONFIG" ]]; then
+  GH_OPTS+=(-v "$GH_HOST_CONFIG":/home/sb/.config/gh:ro,nosuid,nodev,z)
+fi
+
+# Interactive only if stdin is a tty
+TTY_OPTS=(-i)
+if [[ -t 0 ]]; then
+  TTY_OPTS+=(-t)
+fi
+
+if (( $# == 0 )); then
+  set -- bash
+fi
+
+exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
+  --name "$NAME" \
+  --userns=keep-id \
+  --passwd-entry "sb:x:\$UID:\$GID:sb:/home/sb:/bin/bash" \
+  --cap-drop=all \
+  --security-opt no-new-privileges \
+  --read-only \
+  --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
+  --tmpfs /home/sb:rw,nosuid,nodev,size=256m,mode=1777 \
+  --tmpfs /uv-bin:rw,nosuid,nodev,size=128m,mode=1777 \
+  --tmpfs /uv-tools:rw,nosuid,nodev,size=256m,mode=1777 \
+  --label "io.aisb.repo=$ROOT" \
+  --label "io.aisb.repo_hash=$HASH" \
+  --label "io.aisb.session=$STAMP-$$" \
+  -e HOME=/home/sb \
+  -e TERM="${TERM:-xterm-256color}" \
+  -e COLORTERM="${COLORTERM:-truecolor}" \
+  -e UV_CACHE_DIR=/uv-cache \
+  -e UV_PYTHON_INSTALL_DIR=/uv-python \
+  -e UV_PROJECT_ENVIRONMENT=/venv \
+  -e MPLCONFIGDIR=/tmp/mpl \
+  -e XDG_CONFIG_HOME=/tmp/xdg-config \
+  -e XDG_CACHE_HOME=/tmp/xdg-cache \
+  "${ENV_OPTS[@]}" \
+  "${GH_OPTS[@]}" \
+  -v "$ROOT":"$ROOT":nosuid,nodev,z \
+  -v "$UV_CACHE":/uv-cache:nosuid,nodev,z \
+  -v "$UV_PYTHON_DIR":/uv-python:nosuid,nodev,z \
+  -v "$VENV_DIR":/venv:nosuid,nodev,z \
+  -w "$ROOT" \
+  "${SB_IMAGE:-localhost/aisb-base:latest}" \
+  "$@"

@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Usage:
+#   build-containers [base|claude|codex|pi|all]
+#
+# Defaults to `all` when called with no argument. For `all`, the base is
+# built first and then the three flavor images build in parallel. Output
+# from parallel builds is prefixed with [flavor] so lines stay attributable.
+#
+# Env vars:
+#   CLAUDE_NO_CACHE=1   pass --no-cache to podman build
+#   BASE_IMAGE          override base image tag (default: localhost/aisb-base:latest)
+#
+# Each flavor's image tag matches what the run-* wrappers expect:
+#   base    -> aisb-base:latest
+#   claude  -> claude-uv:latest
+#   codex   -> codex-uv:latest
+#   pi      -> pi-uv:latest
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
+FLAVOR="${1:-all}"
+
+BASE_IMAGE_TAG="${BASE_IMAGE:-localhost/aisb-base:latest}"
+
+COMMON_FLAGS=()
+if [[ "${CLAUDE_NO_CACHE:-0}" == "1" ]]; then
+  COMMON_FLAGS+=(--no-cache)
+fi
+
+build_one() {
+  local flavor="$1"
+  local containerfile="$REPO_ROOT/Containerfile.$flavor"
+
+  if [[ ! -f "$containerfile" ]]; then
+    echo "error: $containerfile not found" >&2
+    return 1
+  fi
+
+  local -a flags=("${COMMON_FLAGS[@]}")
+  local tag
+
+  case "$flavor" in
+    base)
+      tag="$BASE_IMAGE_TAG"
+      ;;
+    claude)
+      tag="claude-uv:latest"
+      flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
+      local claude_version
+      claude_version="$(npm view @anthropic-ai/claude-code version 2>/dev/null || echo unknown)"
+      echo "Latest Claude Code version: $claude_version"
+      flags+=(--build-arg "CLAUDE_VERSION=$claude_version")
+      ;;
+    codex)
+      tag="codex-uv:latest"
+      flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
+      local codex_version
+      codex_version="$(npm view @openai/codex version 2>/dev/null || echo unknown)"
+      echo "Latest Codex version: $codex_version"
+      flags+=(--build-arg "CODEX_VERSION=$codex_version")
+      ;;
+    pi)
+      tag="pi-uv:latest"
+      flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
+      local pi_version
+      pi_version="$(npm view @mariozechner/pi-coding-agent version 2>/dev/null || echo unknown)"
+      echo "Latest pi-coding-agent version: $pi_version"
+      flags+=(--build-arg "PI_VERSION=$pi_version")
+      ;;
+    *)
+      echo "error: unknown flavor '$flavor' (expected: base|claude|codex|pi|all)" >&2
+      return 2
+      ;;
+  esac
+
+  # Flavors depend on the base. For single-flavor invocations, build base on
+  # demand. The `all` branch below builds the base up front before spawning
+  # parallel flavor builds, so this branch is skipped there.
+  if [[ "$flavor" != "base" ]] && ! podman image exists "$BASE_IMAGE_TAG"; then
+    echo "Base image '$BASE_IMAGE_TAG' not found; building it first."
+    build_one base
+  fi
+
+  echo "Building $tag from $containerfile"
+  podman build \
+    "${flags[@]}" \
+    -t "$tag" \
+    -f "$containerfile" \
+    "$REPO_ROOT"
+}
+
+case "$FLAVOR" in
+  all)
+    build_one base
+    pids=()
+    labels=()
+    for f in claude codex pi; do
+      (build_one "$f" 2>&1 | sed -u "s/^/[$f] /") &
+      pids+=($!)
+      labels+=("$f")
+    done
+    fail=0
+    for i in "${!pids[@]}"; do
+      if ! wait "${pids[$i]}"; then
+        echo "build failed: ${labels[$i]}" >&2
+        fail=$((fail + 1))
+      fi
+    done
+    if (( fail > 0 )); then
+      echo "$fail flavor build(s) failed" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    build_one "$FLAVOR"
+    ;;
+esac
