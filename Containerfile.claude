@@ -2,6 +2,11 @@ ARG BASE_IMAGE=localhost/aisb-base:latest
 FROM ${BASE_IMAGE}
 
 ARG CLAUDE_VERSION=unknown
+# Claude is installed via the upstream curl|bash installer. Accepted as
+# standard practice for this vendor; pinning is left to CLAUDE_VERSION as a
+# cache-busting key (install.sh fetches latest at build time). Revisit to
+# pin via `npm i -g @anthropic-ai/claude-code@${CLAUDE_VERSION}` if the
+# TOCTOU window becomes a concern.
 RUN echo "claude-code cache key: ${CLAUDE_VERSION}" \
  && bash -lc 'set -euo pipefail; \
       export HOME=/opt/claude-staging; \

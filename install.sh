@@ -21,6 +21,11 @@ for agent in "${AGENTS[@]}"; do
     continue
   fi
 
+  if [[ -e "$link" && ! -L "$link" ]]; then
+    echo "refuse: $link exists and is not a symlink; skipping $agent" >&2
+    continue
+  fi
+
   ln -sfn "$target" "$link"
   echo "linked: $link -> $target"
 done

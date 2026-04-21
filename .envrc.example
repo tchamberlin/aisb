@@ -1,0 +1,13 @@
+# Example direnv config. Copy to `.envrc` and adjust to your secret store.
+# aisb does not ship a tracked `.envrc`; you are expected to provide your own.
+#
+# Any mechanism that exports these env vars in your shell before invoking a
+# wrapper (claude/codex/pi/sb) will work. This example uses `pass`:
+#   https://www.passwordstore.org
+#
+# After editing, run `direnv allow` in this directory.
+
+export OPENAI_API_KEY=$(pass show api/openai)
+export ANTHROPIC_API_KEY=$(pass show api/anthropic)
+export TOGETHER_API_KEY=$(pass show api/together)
+export OPENROUTER_API_KEY=$(pass show api/openrouter)

@@ -10,26 +10,37 @@ fi
 ROOT="$(realpath "$ROOT")"
 
 BASE="$(basename "$ROOT")"
+BASE="${BASE//[^A-Za-z0-9._-]/_}"
+BASE="${BASE:0:48}"
+BASE="${BASE:-repo}"
 HASH="$(printf '%s' "$ROOT" | { sha1sum 2>/dev/null || shasum -a 1; } | awk '{print $1}' | cut -c1-10)"
 
 # Unique per invocation so multiple can run simultaneously
 STAMP="$(date +%Y%m%d-%H%M%S)"
 NAME="codex-${BASE}-${HASH}-${STAMP}-$$"
 
-# Ensure host-side auth/config files exist
+# Ensure host-side auth/config files exist. Only these two files are shared
+# across repos (OAuth token + user config); everything else (sessions, logs,
+# caches) is scoped per-repo under $STATE_BASE/codex/$HASH/.
 mkdir -p "$HOME/.codex"
 touch "$HOME/.codex/auth.json"
 touch "$HOME/.codex/config.toml"
 
-# Repo-local writable paths so codex's internal sandbox can use uv/pytest without overrides.
-WORKSPACE_CACHE_DIR="$ROOT/.cache"
-WORKSPACE_STATE_DIR="$ROOT/.local/state"
-WORKSPACE_UV_CACHE_DIR="$ROOT/.uv-cache"
-WORKSPACE_UV_PYTHON_DIR="$ROOT/.uv-python"
-WORKSPACE_VENV_DIR="$ROOT/.venv"
-WORKSPACE_PYTEST_CACHE_DIR="$ROOT/.pytest_cache"
+# Durable workspace-scoped state under XDG so the repo stays clean and host
+# ~/.codex is not globally writable from normal runs.
+CACHE_BASE="${XDG_CACHE_HOME:-$HOME/.cache}/claude-podman"
+STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/claude-podman"
+
+CODEX_DIR="${STATE_BASE}/codex/${HASH}/dot-codex"
+WORKSPACE_CACHE_DIR="${STATE_BASE}/codex/${HASH}/cache"
+WORKSPACE_STATE_DIR="${STATE_BASE}/codex/${HASH}/state"
+WORKSPACE_UV_CACHE_DIR="${CACHE_BASE}/uv/${HASH}"
+WORKSPACE_UV_PYTHON_DIR="${STATE_BASE}/codex/${HASH}/uv-python"
+WORKSPACE_VENV_DIR="${STATE_BASE}/codex/${HASH}/venvs/${STAMP}-$$"
+WORKSPACE_PYTEST_CACHE_DIR="${STATE_BASE}/codex/${HASH}/pytest"
 
 mkdir -p \
+  "$CODEX_DIR" \
   "$WORKSPACE_CACHE_DIR" \
   "$WORKSPACE_STATE_DIR" \
   "$WORKSPACE_UV_CACHE_DIR" \
@@ -37,10 +48,45 @@ mkdir -p \
   "$WORKSPACE_VENV_DIR" \
   "$WORKSPACE_PYTEST_CACHE_DIR"
 
+# Prune per-invocation venv dirs older than 7 days
+find "${STATE_BASE}/codex/${HASH}/venvs" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+
 # Build flags — container IS the sandbox, so bypass codex's internal one
 CODEX_FLAGS=()
 if [[ "${CODEX_SAFE_MODE:-0}" != "1" ]]; then
   CODEX_FLAGS+=(--dangerously-bypass-approvals-and-sandbox)
+fi
+
+# Auth-write mode: for `codex login` or token refresh. Flips auth files to
+# writable; makes the repo read-only to shrink blast radius.
+if [[ "${AISB_AUTH_WRITE:-0}" == "1" || "${CODEX_AUTH_WRITE:-0}" == "1" ]]; then
+  AUTH_MODE="rw"
+  REPO_MODE="rw"
+  if [[ "${AISB_AUTH_WRITE_KEEP_REPO_RW:-0}" != "1" ]]; then
+    REPO_MODE="ro"
+  fi
+  echo "codex: auth-write mode (auth=rw, repo=$REPO_MODE)" >&2
+else
+  AUTH_MODE="ro"
+  REPO_MODE="rw"
+fi
+
+# Resource caps (overridable via env)
+: "${AISB_MEMORY:=8g}"
+: "${AISB_CPUS:=4}"
+: "${AISB_PIDS:=1024}"
+
+# Optional: extra seccomp denies on top of podman's default profile
+SECCOMP_OPTS=()
+if [[ "${AISB_STRICT_SECCOMP:-0}" == "1" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+  SECCOMP_PROFILE="${AISB_SECCOMP_PROFILE:-$REPO_ROOT/seccomp-strict.json}"
+  if [[ -r "$SECCOMP_PROFILE" ]]; then
+    SECCOMP_OPTS+=(--security-opt "seccomp=$SECCOMP_PROFILE")
+  else
+    echo "warn: AISB_STRICT_SECCOMP=1 but $SECCOMP_PROFILE is not readable; using default" >&2
+  fi
 fi
 
 # OpenAI auth: forward API key
@@ -58,7 +104,7 @@ elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
 fi
 GH_HOST_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
 if [[ -d "$GH_HOST_CONFIG" ]]; then
-  GH_OPTS+=(-v "$GH_HOST_CONFIG":/home/codex/.config/gh:ro,nosuid,nodev,z)
+  GH_OPTS+=(-v "$GH_HOST_CONFIG":/home/codex/.config/gh:${AUTH_MODE},nosuid,nodev,noexec,z)
 fi
 
 IMAGE="${CODEX_IMAGE:-codex-uv:latest}"
@@ -75,6 +121,10 @@ exec podman run --rm -it --pull=never \
   --cap-drop=all \
   --security-opt no-new-privileges \
   --read-only \
+  --memory="$AISB_MEMORY" \
+  --cpus="$AISB_CPUS" \
+  --pids-limit="$AISB_PIDS" \
+  "${SECCOMP_OPTS[@]}" \
   --tmpfs /tmp:rw,nosuid,nodev,size=512m \
   --tmpfs /home/codex:rw,nosuid,nodev,size=256m \
   --tmpfs /uv-bin:rw,nosuid,nodev,size=128m \
@@ -85,16 +135,24 @@ exec podman run --rm -it --pull=never \
   -e HOME=/home/codex \
   -e TERM="${TERM:-xterm-256color}" \
   -e COLORTERM="${COLORTERM:-truecolor}" \
-  -e XDG_CACHE_HOME="$WORKSPACE_CACHE_DIR" \
-  -e XDG_STATE_HOME="$WORKSPACE_STATE_DIR" \
-  -e UV_CACHE_DIR="$WORKSPACE_UV_CACHE_DIR" \
-  -e UV_PYTHON_INSTALL_DIR="$WORKSPACE_UV_PYTHON_DIR" \
-  -e UV_PROJECT_ENVIRONMENT="$WORKSPACE_VENV_DIR" \
-  -e PYTEST_ADDOPTS="${PYTEST_ADDOPTS:-} -o cache_dir=$WORKSPACE_PYTEST_CACHE_DIR" \
+  -e XDG_CACHE_HOME=/aisb-codex/cache \
+  -e XDG_STATE_HOME=/aisb-codex/state \
+  -e UV_CACHE_DIR=/aisb-codex/uv-cache \
+  -e UV_PYTHON_INSTALL_DIR=/aisb-codex/uv-python \
+  -e UV_PROJECT_ENVIRONMENT=/aisb-codex/venv \
+  -e PYTEST_ADDOPTS="${PYTEST_ADDOPTS:-} -o cache_dir=/aisb-codex/pytest" \
   "${OPENAI_OPTS[@]}" \
   "${GH_OPTS[@]}" \
-  -v "$ROOT":"$ROOT":nosuid,nodev,z \
-  -v "$HOME/.codex":/home/codex/.codex:nosuid,nodev,noexec,z \
+  -v "$ROOT":"$ROOT":${REPO_MODE},nosuid,nodev,z \
+  -v "$CODEX_DIR":/home/codex/.codex:rw,nosuid,nodev,noexec,z \
+  -v "$HOME/.codex/auth.json":/home/codex/.codex/auth.json:${AUTH_MODE},nosuid,nodev,noexec,z \
+  -v "$HOME/.codex/config.toml":/home/codex/.codex/config.toml:${AUTH_MODE},nosuid,nodev,noexec,z \
+  -v "$WORKSPACE_CACHE_DIR":/aisb-codex/cache:rw,nosuid,nodev,z \
+  -v "$WORKSPACE_STATE_DIR":/aisb-codex/state:rw,nosuid,nodev,z \
+  -v "$WORKSPACE_UV_CACHE_DIR":/aisb-codex/uv-cache:rw,nosuid,nodev,z \
+  -v "$WORKSPACE_UV_PYTHON_DIR":/aisb-codex/uv-python:rw,nosuid,nodev,z \
+  -v "$WORKSPACE_VENV_DIR":/aisb-codex/venv:rw,nosuid,nodev,Z \
+  -v "$WORKSPACE_PYTEST_CACHE_DIR":/aisb-codex/pytest:rw,nosuid,nodev,z \
   -w "$ROOT" \
   "$IMAGE" \
   "${CODEX_FLAGS[@]}" \

@@ -2,8 +2,9 @@ ARG BASE_IMAGE=localhost/aisb-base:latest
 FROM ${BASE_IMAGE}
 
 ARG CODEX_VERSION=unknown
-RUN echo "codex cache key: ${CODEX_VERSION}" \
- && npm install -g @openai/codex@latest
+RUN echo "codex version: ${CODEX_VERSION}" \
+ && test "${CODEX_VERSION}" != "unknown" \
+ && npm install -g "@openai/codex@${CODEX_VERSION}"
 
 # Codex runs as user "codex" with HOME=/home/codex.
 RUN mkdir -p /home/codex && chmod 0777 /home/codex

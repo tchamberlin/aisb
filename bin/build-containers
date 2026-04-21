@@ -30,6 +30,16 @@ if [[ "${CLAUDE_NO_CACHE:-0}" == "1" ]]; then
   COMMON_FLAGS+=(--no-cache)
 fi
 
+resolve_npm_version() {
+  local pkg="$1"
+  local version
+  if ! version="$(npm view "$pkg" version 2>/dev/null)" || [[ -z "$version" ]]; then
+    echo "error: could not resolve npm version for $pkg (is npm installed and online?)" >&2
+    return 1
+  fi
+  printf '%s' "$version"
+}
+
 build_one() {
   local flavor="$1"
   local containerfile="$REPO_ROOT/Containerfile.$flavor"
@@ -50,7 +60,7 @@ build_one() {
       tag="claude-uv:latest"
       flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
       local claude_version
-      claude_version="$(npm view @anthropic-ai/claude-code version 2>/dev/null || echo unknown)"
+      claude_version="$(resolve_npm_version @anthropic-ai/claude-code)"
       echo "Latest Claude Code version: $claude_version"
       flags+=(--build-arg "CLAUDE_VERSION=$claude_version")
       ;;
@@ -58,7 +68,7 @@ build_one() {
       tag="codex-uv:latest"
       flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
       local codex_version
-      codex_version="$(npm view @openai/codex version 2>/dev/null || echo unknown)"
+      codex_version="$(resolve_npm_version @openai/codex)"
       echo "Latest Codex version: $codex_version"
       flags+=(--build-arg "CODEX_VERSION=$codex_version")
       ;;
@@ -66,7 +76,7 @@ build_one() {
       tag="pi-uv:latest"
       flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
       local pi_version
-      pi_version="$(npm view @mariozechner/pi-coding-agent version 2>/dev/null || echo unknown)"
+      pi_version="$(resolve_npm_version @mariozechner/pi-coding-agent)"
       echo "Latest pi-coding-agent version: $pi_version"
       flags+=(--build-arg "PI_VERSION=$pi_version")
       ;;

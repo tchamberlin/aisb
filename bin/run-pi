@@ -10,6 +10,9 @@ fi
 ROOT="$(realpath "$ROOT")"
 
 BASE="$(basename "$ROOT")"
+BASE="${BASE//[^A-Za-z0-9._-]/_}"
+BASE="${BASE:0:48}"
+BASE="${BASE:-repo}"
 HASH="$(printf '%s' "$ROOT" | { sha1sum 2>/dev/null || shasum -a 1; } | awk '{print $1}' | cut -c1-10)"
 
 # Unique per invocation so multiple can run simultaneously
@@ -34,11 +37,44 @@ mkdir -p "$PI_DIR" "$UV_CACHE" "$VENV_DIR"
 # while keeping auth, sessions, and other mutable pi state in the host state dir.
 MODEL_OPTS=()
 if [[ -f "$PROJECT_MODELS" ]]; then
-  MODEL_OPTS+=(-v "$PROJECT_MODELS":/home/sb/.pi/agent/models.json:nosuid,nodev,z)
+  MODEL_OPTS+=(-v "$PROJECT_MODELS":/home/sb/.pi/agent/models.json:ro,nosuid,nodev,noexec,z)
 fi
 
 # Prune venv dirs older than 7 days
 find "${STATE_BASE}/venvs/${HASH}" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+
+# Pi has no persistent host auth file; API keys are forwarded via env.
+# AISB_AUTH_WRITE is accepted for wrapper parity and switches the repo mount
+# to read-only, mirroring the other wrappers' auth-refresh posture.
+if [[ "${AISB_AUTH_WRITE:-0}" == "1" || "${PI_AUTH_WRITE:-0}" == "1" ]]; then
+  AUTH_MODE="rw"
+  REPO_MODE="rw"
+  if [[ "${AISB_AUTH_WRITE_KEEP_REPO_RW:-0}" != "1" ]]; then
+    REPO_MODE="ro"
+  fi
+  echo "pi: auth-write mode (repo=$REPO_MODE)" >&2
+else
+  AUTH_MODE="ro"
+  REPO_MODE="rw"
+fi
+
+# Resource caps (overridable via env)
+: "${AISB_MEMORY:=8g}"
+: "${AISB_CPUS:=4}"
+: "${AISB_PIDS:=1024}"
+
+# Optional: extra seccomp denies on top of podman's default profile
+SECCOMP_OPTS=()
+if [[ "${AISB_STRICT_SECCOMP:-0}" == "1" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+  SECCOMP_PROFILE="${AISB_SECCOMP_PROFILE:-$REPO_ROOT/seccomp-strict.json}"
+  if [[ -r "$SECCOMP_PROFILE" ]]; then
+    SECCOMP_OPTS+=(--security-opt "seccomp=$SECCOMP_PROFILE")
+  else
+    echo "warn: AISB_STRICT_SECCOMP=1 but $SECCOMP_PROFILE is not readable; using default" >&2
+  fi
+fi
 
 # Forward API keys and editor preferences that pi reads
 PI_OPTS=()
@@ -57,7 +93,7 @@ elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
 fi
 GH_HOST_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
 if [[ -d "$GH_HOST_CONFIG" ]]; then
-  GH_OPTS+=(-v "$GH_HOST_CONFIG":/home/sb/.config/gh:ro,nosuid,nodev,z)
+  GH_OPTS+=(-v "$GH_HOST_CONFIG":/home/sb/.config/gh:${AUTH_MODE},nosuid,nodev,noexec,z)
 fi
 
 exec podman run --rm -it --pull=never \
@@ -67,6 +103,10 @@ exec podman run --rm -it --pull=never \
   --cap-drop=all \
   --security-opt no-new-privileges \
   --read-only \
+  --memory="$AISB_MEMORY" \
+  --cpus="$AISB_CPUS" \
+  --pids-limit="$AISB_PIDS" \
+  "${SECCOMP_OPTS[@]}" \
   --tmpfs /tmp:rw,nosuid,nodev,size=512m \
   --tmpfs /home/sb:rw,nosuid,nodev,size=256m \
   --tmpfs /uv-bin:rw,nosuid,nodev,size=128m \
@@ -81,11 +121,11 @@ exec podman run --rm -it --pull=never \
   -e UV_PROJECT_ENVIRONMENT=/venv \
   "${PI_OPTS[@]}" \
   "${GH_OPTS[@]}" \
-  -v "$ROOT":"$ROOT":nosuid,nodev,z \
-  -v "$PI_DIR":/home/sb/.pi/agent:nosuid,nodev,z \
+  -v "$ROOT":"$ROOT":${REPO_MODE},nosuid,nodev,z \
+  -v "$PI_DIR":/home/sb/.pi/agent:rw,nosuid,nodev,z \
   "${MODEL_OPTS[@]}" \
-  -v "$UV_CACHE":/uv-cache:nosuid,nodev,z \
-  -v "$VENV_DIR":/venv:nosuid,nodev,z \
+  -v "$UV_CACHE":/uv-cache:rw,nosuid,nodev,z \
+  -v "$VENV_DIR":/venv:rw,nosuid,nodev,Z \
   -w "$ROOT" \
   "${PI_IMAGE:-pi-uv:latest}" \
   "$@"

@@ -10,6 +10,9 @@ fi
 ROOT="$(realpath "$ROOT")"
 
 BASE="$(basename "$ROOT")"
+BASE="${BASE//[^A-Za-z0-9._-]/_}"
+BASE="${BASE:0:48}"
+BASE="${BASE:-repo}"
 HASH="$(printf '%s' "$ROOT" | { sha1sum 2>/dev/null || shasum -a 1; } | awk '{print $1}' | cut -c1-10)"
 
 # Unique per invocation so multiple can run simultaneously
@@ -41,7 +44,41 @@ if [[ "${CLAUDE_SAFE_MODE:-0}" != "1" ]]; then
   CLAUDE_FLAGS+=(--dangerously-skip-permissions)
 fi
 
-# GitHub CLI: forward token env var and/or host config
+# Auth-write mode: for `claude login`, token refresh, or first-time setup.
+# Enables writable auth mounts and makes the repo read-only, reducing the
+# blast radius of a session that can modify host credentials.
+if [[ "${AISB_AUTH_WRITE:-0}" == "1" || "${CLAUDE_AUTH_WRITE:-0}" == "1" ]]; then
+  AUTH_MODE="rw"
+  REPO_MODE="rw"
+  if [[ "${AISB_AUTH_WRITE_KEEP_REPO_RW:-0}" != "1" ]]; then
+    REPO_MODE="ro"
+  fi
+  echo "claude: auth-write mode (auth=rw, repo=$REPO_MODE)" >&2
+else
+  AUTH_MODE="ro"
+  REPO_MODE="rw"
+fi
+
+# Resource caps (overridable via env)
+: "${AISB_MEMORY:=8g}"
+: "${AISB_CPUS:=4}"
+: "${AISB_PIDS:=1024}"
+
+# Optional: extra seccomp denies on top of podman's default profile
+# (ptrace, bpf, keyctl, perf_event_open, mount family).
+SECCOMP_OPTS=()
+if [[ "${AISB_STRICT_SECCOMP:-0}" == "1" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+  SECCOMP_PROFILE="${AISB_SECCOMP_PROFILE:-$REPO_ROOT/seccomp-strict.json}"
+  if [[ -r "$SECCOMP_PROFILE" ]]; then
+    SECCOMP_OPTS+=(--security-opt "seccomp=$SECCOMP_PROFILE")
+  else
+    echo "warn: AISB_STRICT_SECCOMP=1 but $SECCOMP_PROFILE is not readable; using default" >&2
+  fi
+fi
+
+# GitHub CLI: forward token env var and/or host config (read-only, noexec)
 GH_OPTS=()
 if [[ -n "${GH_TOKEN:-}" ]]; then
   GH_OPTS+=(-e "GH_TOKEN=$GH_TOKEN")
@@ -50,7 +87,8 @@ elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
 fi
 GH_HOST_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
 if [[ -d "$GH_HOST_CONFIG" ]]; then
-  GH_OPTS+=(-v "$GH_HOST_CONFIG":/home/sb/.config/gh:ro,nosuid,nodev,z)
+  # In auth-write mode allow gh config writes (e.g., for `gh auth login`).
+  GH_OPTS+=(-v "$GH_HOST_CONFIG":/home/sb/.config/gh:${AUTH_MODE},nosuid,nodev,noexec,z)
 fi
 
 exec podman run --rm -it --pull=never \
@@ -60,6 +98,10 @@ exec podman run --rm -it --pull=never \
   --cap-drop=all \
   --security-opt no-new-privileges \
   --read-only \
+  --memory="$AISB_MEMORY" \
+  --cpus="$AISB_CPUS" \
+  --pids-limit="$AISB_PIDS" \
+  "${SECCOMP_OPTS[@]}" \
   --tmpfs /tmp:rw,nosuid,nodev,size=512m \
   --tmpfs /home/sb:rw,nosuid,nodev,size=256m \
   --tmpfs /uv-bin:rw,nosuid,nodev,size=128m \
@@ -73,13 +115,13 @@ exec podman run --rm -it --pull=never \
   -e UV_CACHE_DIR=/uv-cache \
   -e UV_PROJECT_ENVIRONMENT=/venv \
   "${GH_OPTS[@]}" \
-  -v "$ROOT":"$ROOT":nosuid,nodev,z \
-  -v "$CLAUDE_DIR":/home/sb/.claude:nosuid,nodev,z \
-  -v "$HOME/.claude/.credentials.json":/home/sb/.claude/.credentials.json:nosuid,nodev,z \
-  -v "$HOME/.claude/settings.json":/home/sb/.claude/settings.json:nosuid,nodev,z \
-  -v "$HOME/.claude.json":/home/sb/.claude.json:nosuid,nodev,z \
-  -v "$UV_CACHE":/uv-cache:nosuid,nodev,z \
-  -v "$VENV_DIR":/venv:nosuid,nodev,z \
+  -v "$ROOT":"$ROOT":${REPO_MODE},nosuid,nodev,z \
+  -v "$CLAUDE_DIR":/home/sb/.claude:rw,nosuid,nodev,z \
+  -v "$HOME/.claude/.credentials.json":/home/sb/.claude/.credentials.json:${AUTH_MODE},nosuid,nodev,noexec,z \
+  -v "$HOME/.claude/settings.json":/home/sb/.claude/settings.json:${AUTH_MODE},nosuid,nodev,noexec,z \
+  -v "$HOME/.claude.json":/home/sb/.claude.json:${AUTH_MODE},nosuid,nodev,noexec,z \
+  -v "$UV_CACHE":/uv-cache:rw,nosuid,nodev,z \
+  -v "$VENV_DIR":/venv:rw,nosuid,nodev,Z \
   -w "$ROOT" \
   "${CLAUDE_IMAGE:-claude-uv:latest}" \
   "${CLAUDE_FLAGS[@]}" \

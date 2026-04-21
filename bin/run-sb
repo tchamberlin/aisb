@@ -11,7 +11,11 @@ set -euo pipefail
 #   run-sb python3 -c 'print(1)'
 #
 # Env:
-#   SB_IMAGE       override image tag (default: localhost/aisb-base:latest)
+#   SB_IMAGE          override image tag (default: localhost/aisb-base:latest)
+#   AISB_NO_NETWORK=1 run with --network=none (defense in depth for untrusted cmds)
+#   AISB_MEMORY       memory cap passed to --memory (default: 8g)
+#   AISB_CPUS         cpu cap passed to --cpus (default: 4)
+#   AISB_PIDS         pid cap passed to --pids-limit (default: 1024)
 
 if git rev-parse --show-toplevel >/dev/null 2>&1; then
   ROOT="$(git rev-parse --show-toplevel)"
@@ -21,6 +25,9 @@ fi
 ROOT="$(realpath "$ROOT")"
 
 BASE="$(basename "$ROOT")"
+BASE="${BASE//[^A-Za-z0-9._-]/_}"
+BASE="${BASE:0:48}"
+BASE="${BASE:-repo}"
 HASH="$(printf '%s' "$ROOT" | { sha1sum 2>/dev/null || shasum -a 1; } | awk '{print $1}' | cut -c1-10)"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 NAME="sb-${BASE}-${HASH}-${STAMP}-$$"
@@ -56,7 +63,7 @@ elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
 fi
 GH_HOST_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
 if [[ -d "$GH_HOST_CONFIG" ]]; then
-  GH_OPTS+=(-v "$GH_HOST_CONFIG":/home/sb/.config/gh:ro,nosuid,nodev,z)
+  GH_OPTS+=(-v "$GH_HOST_CONFIG":/home/sb/.config/gh:ro,nosuid,nodev,noexec,z)
 fi
 
 # Interactive only if stdin is a tty
@@ -69,6 +76,29 @@ if (( $# == 0 )); then
   set -- bash
 fi
 
+# Resource caps (overridable via env)
+: "${AISB_MEMORY:=8g}"
+: "${AISB_CPUS:=4}"
+: "${AISB_PIDS:=1024}"
+
+NET_OPTS=()
+if [[ "${AISB_NO_NETWORK:-0}" == "1" ]]; then
+  NET_OPTS+=(--network=none)
+fi
+
+# Optional: extra seccomp denies on top of podman's default profile
+SECCOMP_OPTS=()
+if [[ "${AISB_STRICT_SECCOMP:-0}" == "1" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+  SECCOMP_PROFILE="${AISB_SECCOMP_PROFILE:-$REPO_ROOT/seccomp-strict.json}"
+  if [[ -r "$SECCOMP_PROFILE" ]]; then
+    SECCOMP_OPTS+=(--security-opt "seccomp=$SECCOMP_PROFILE")
+  else
+    echo "warn: AISB_STRICT_SECCOMP=1 but $SECCOMP_PROFILE is not readable; using default" >&2
+  fi
+fi
+
 exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   --name "$NAME" \
   --userns=keep-id \
@@ -76,6 +106,11 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   --cap-drop=all \
   --security-opt no-new-privileges \
   --read-only \
+  --memory="$AISB_MEMORY" \
+  --cpus="$AISB_CPUS" \
+  --pids-limit="$AISB_PIDS" \
+  "${NET_OPTS[@]}" \
+  "${SECCOMP_OPTS[@]}" \
   --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
   --tmpfs /home/sb:rw,nosuid,nodev,size=256m,mode=1777 \
   --tmpfs /uv-bin:rw,nosuid,nodev,size=128m,mode=1777 \
@@ -94,10 +129,10 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   -e XDG_CACHE_HOME=/tmp/xdg-cache \
   "${ENV_OPTS[@]}" \
   "${GH_OPTS[@]}" \
-  -v "$ROOT":"$ROOT":nosuid,nodev,z \
-  -v "$UV_CACHE":/uv-cache:nosuid,nodev,z \
-  -v "$UV_PYTHON_DIR":/uv-python:nosuid,nodev,z \
-  -v "$VENV_DIR":/venv:nosuid,nodev,z \
+  -v "$ROOT":"$ROOT":rw,nosuid,nodev,z \
+  -v "$UV_CACHE":/uv-cache:rw,nosuid,nodev,z \
+  -v "$UV_PYTHON_DIR":/uv-python:rw,nosuid,nodev,z \
+  -v "$VENV_DIR":/venv:rw,nosuid,nodev,Z \
   -w "$ROOT" \
   "${SB_IMAGE:-localhost/aisb-base:latest}" \
   "$@"

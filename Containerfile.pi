@@ -2,7 +2,8 @@ ARG BASE_IMAGE=localhost/aisb-base:latest
 FROM ${BASE_IMAGE}
 
 ARG PI_VERSION=unknown
-RUN echo "pi-coding-agent cache key: ${PI_VERSION}" \
- && npm install -g @mariozechner/pi-coding-agent@latest
+RUN echo "pi-coding-agent version: ${PI_VERSION}" \
+ && test "${PI_VERSION}" != "unknown" \
+ && npm install -g "@mariozechner/pi-coding-agent@${PI_VERSION}"
 
 ENTRYPOINT ["pi"]
