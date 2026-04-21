@@ -23,17 +23,23 @@ NAME="claude-${BASE}-${HASH}-${STAMP}-$$"
 touch "$HOME/.claude.json"
 mkdir -p "$HOME/.claude"
 touch "$HOME/.claude/.credentials.json"
-touch "$HOME/.claude/settings.json"
 
-# Per-repo state dirs (plans, settings, etc. are grouped by repo)
+# Durable workspace-scoped state under XDG so host ~/.claude is not globally
+# writable from normal runs.
 CACHE_BASE="${XDG_CACHE_HOME:-$HOME/.cache}/claude-podman"
 STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/claude-podman"
 
-CLAUDE_DIR="${STATE_BASE}/claude/${HASH}"
+CLAUDE_DIR="${STATE_BASE}/claude/${HASH}/dot-claude"
 UV_CACHE="${CACHE_BASE}/uv/${HASH}"
 VENV_DIR="${STATE_BASE}/venvs/${HASH}/${STAMP}-$$"
 
 mkdir -p "$CLAUDE_DIR" "$UV_CACHE" "$VENV_DIR"
+
+# Keep Claude's mutable settings in the per-repo writable state dir. If the
+# host has global settings, seed them once without binding the host file read-only.
+if [[ -s "$HOME/.claude/settings.json" && ! -e "$CLAUDE_DIR/settings.json" ]]; then
+  cp -p "$HOME/.claude/settings.json" "$CLAUDE_DIR/settings.json"
+fi
 
 # Prune venv dirs older than 7 days
 find "${STATE_BASE}/venvs/${HASH}" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
@@ -44,16 +50,20 @@ if [[ "${CLAUDE_SAFE_MODE:-0}" != "1" ]]; then
   CLAUDE_FLAGS+=(--dangerously-skip-permissions)
 fi
 
+# Claude may rewrite auth files during normal startup. Keep the rest of
+# ~/.claude per-repo, but allow the narrow host auth files to be writable.
+CLAUDE_AUTH_MODE="rw"
+
 # Auth-write mode: for `claude login`, token refresh, or first-time setup.
-# Enables writable auth mounts and makes the repo read-only, reducing the
-# blast radius of a session that can modify host credentials.
+# For Claude auth files this is already the default; this mode still makes
+# the repo read-only and allows gh config writes.
 if [[ "${AISB_AUTH_WRITE:-0}" == "1" || "${CLAUDE_AUTH_WRITE:-0}" == "1" ]]; then
   AUTH_MODE="rw"
   REPO_MODE="rw"
   if [[ "${AISB_AUTH_WRITE_KEEP_REPO_RW:-0}" != "1" ]]; then
     REPO_MODE="ro"
   fi
-  echo "claude: auth-write mode (auth=rw, repo=$REPO_MODE)" >&2
+  echo "claude: auth-write mode (claude-auth=rw, repo=$REPO_MODE)" >&2
 else
   AUTH_MODE="ro"
   REPO_MODE="rw"
@@ -133,9 +143,8 @@ exec podman run --rm -it --pull=never \
   "${GH_OPTS[@]}" \
   -v "$ROOT":"$ROOT":${REPO_MODE},nosuid,nodev,z \
   -v "$CLAUDE_DIR":/home/sb/.claude:rw,nosuid,nodev,z \
-  -v "$HOME/.claude/.credentials.json":/home/sb/.claude/.credentials.json:${AUTH_MODE},nosuid,nodev,noexec,z \
-  -v "$HOME/.claude/settings.json":/home/sb/.claude/settings.json:${AUTH_MODE},nosuid,nodev,noexec,z \
-  -v "$HOME/.claude.json":/home/sb/.claude.json:${AUTH_MODE},nosuid,nodev,noexec,z \
+  -v "$HOME/.claude/.credentials.json":/home/sb/.claude/.credentials.json:${CLAUDE_AUTH_MODE},nosuid,nodev,noexec,z \
+  -v "$HOME/.claude.json":/home/sb/.claude.json:${CLAUDE_AUTH_MODE},nosuid,nodev,noexec,z \
   -v "$UV_CACHE":/uv-cache:rw,nosuid,nodev,z \
   -v "$VENV_DIR":/venv:rw,nosuid,nodev,Z \
   -w "$ROOT" \

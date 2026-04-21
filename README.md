@@ -49,15 +49,17 @@ The wrappers:
 - mount the current repo (git root or `$PWD`) read-write at its real path
 - forward API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `TOGETHER_API_KEY`, …) and `gh` auth
-- mount host credentials (`~/.claude/.credentials.json`, `~/.claude.json`,
-  `~/.codex/auth.json`, `~/.codex/config.toml`, `~/.config/gh`) **read-only**
-  in normal runs. To refresh tokens or run a first-time `login`, use
-  `AISB_AUTH_WRITE=1` (or wrapper-specific `CLAUDE_AUTH_WRITE=1` /
-  `CODEX_AUTH_WRITE=1`). Auth-write mode also mounts the repo read-only to
-  shrink blast radius — set `AISB_AUTH_WRITE_KEEP_REPO_RW=1` to override.
-- keep durable per-repo runtime state (logs, plans, sessions, venvs, uv
-  caches) under `$XDG_STATE_HOME/claude-podman/` and `$XDG_CACHE_HOME/claude-podman/`
-  — survives container removal and image rebuilds
+- mount Claude's host auth files (`~/.claude/.credentials.json`,
+  `~/.claude.json`) read-write for Claude Code compatibility, while keeping the
+  rest of Claude runtime state per-repo. Codex auth/config and `gh` config are
+  mounted **read-only** in normal runs. To refresh tokens or run a first-time
+  `login`, use `AISB_AUTH_WRITE=1` (or wrapper-specific `CODEX_AUTH_WRITE=1`).
+  Auth-write mode also mounts the repo read-only to shrink blast radius — set
+  `AISB_AUTH_WRITE_KEEP_REPO_RW=1` to override.
+- keep durable per-repo runtime state (Claude/Codex dotdirs, logs, sessions,
+  venvs, uv caches) under `$XDG_STATE_HOME/claude-podman/` and
+  `$XDG_CACHE_HOME/claude-podman/` — survives container removal and image
+  rebuilds
 
 ## Hardening
 
@@ -100,11 +102,10 @@ the sandbox with sensitive material:
   boundaries to model alignment. If the model is jailbroken or
   prompt-injected, no in-container check will stop it.
 
-The design separates long-lived credentials from ordinary writable runtime
-state — credential files are mounted read-only in normal runs (see
-`AISB_AUTH_WRITE=1` below for refresh mode) — so a prompt-injected session
-cannot silently corrupt future-run auth. It does not prevent exfiltration of
-credentials that the current session can read.
+Claude auth files are writable in normal runs because Claude Code may rewrite
+them during startup. Codex credentials and `gh` config remain read-only in
+normal runs (see `AISB_AUTH_WRITE=1` below for refresh mode). This does not
+prevent exfiltration of credentials that the current session can read.
 
 ## Environment
 
@@ -128,7 +129,7 @@ Per-wrapper overrides:
 | `CLAUDE_NO_CACHE=1`        | Pass `--no-cache` to `podman build`.                                  |
 | `BASE_IMAGE`               | Override base image tag at build time.                                |
 | `AISB_AUTH_WRITE=1`        | Flip auth mounts to rw and repo to ro (for `login` / token refresh).  |
-| `CLAUDE_AUTH_WRITE=1`      | As above, for `run-claude` only.                                      |
+| `CLAUDE_AUTH_WRITE=1`      | For `run-claude`, mount the repo ro while Claude auth stays writable. |
 | `CODEX_AUTH_WRITE=1`       | As above, for `run-codex` only.                                       |
 | `PI_AUTH_WRITE=1`          | As above, for `run-pi` only (no-op on auth but flips repo to ro).     |
 | `AISB_AUTH_WRITE_KEEP_REPO_RW=1` | In auth-write mode, keep the repo writable.                     |
