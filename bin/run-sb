@@ -81,6 +81,22 @@ fi
 : "${AISB_CPUS:=4}"
 : "${AISB_PIDS:=1024}"
 
+# Warn if the host has less available memory than AISB_MEMORY; podman will
+# honor the cap but the kernel may reap the container under real pressure.
+if [[ -r /proc/meminfo ]] && [[ "$AISB_MEMORY" =~ ^([0-9]+)([bBkKmMgG]?)$ ]]; then
+  _n="${BASH_REMATCH[1]}"
+  case "${BASH_REMATCH[2],,}" in
+    ""|b) _req_mem="$_n" ;;
+    k)    _req_mem=$((_n * 1024)) ;;
+    m)    _req_mem=$((_n * 1024 * 1024)) ;;
+    g)    _req_mem=$((_n * 1024 * 1024 * 1024)) ;;
+  esac
+  _avail_mem="$(awk '/^MemAvailable:/{print $2*1024; exit}' /proc/meminfo)"
+  if [[ -n "${_req_mem:-}" && -n "$_avail_mem" ]] && (( _req_mem > _avail_mem )); then
+    echo "warn: AISB_MEMORY=$AISB_MEMORY exceeds host MemAvailable (~$((_avail_mem/1024/1024)) MiB); container may OOM" >&2
+  fi
+fi
+
 NET_OPTS=()
 if [[ "${AISB_NO_NETWORK:-0}" == "1" ]]; then
   NET_OPTS+=(--network=none)
