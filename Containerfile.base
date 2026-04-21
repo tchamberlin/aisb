@@ -43,3 +43,13 @@ ENV HOME=/home/sb \
     UV_TOOL_DIR=/uv-tools \
     UV_TOOL_BIN_DIR=/uv-bin \
     PATH=/uv-bin:/home/sb/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+# Python tooling installed globally via uv tool: ruff (linter/formatter),
+# ty (type checker, preview), prek (Rust-based pre-commit compatible).
+# Shims land in /uv-bin (already on PATH, world-writable for runtime users).
+RUN uv tool install ruff \
+ && uv tool install ty \
+ && uv tool install prek
+
+# Biome (JS/TS linter/formatter) installed globally via npm.
+RUN npm install -g @biomejs/biome
