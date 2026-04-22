@@ -26,6 +26,7 @@ fresh container; only the current repo and per-agent auth are mounted.
 ```sh
 ./install.sh                    # symlinks ~/.local/bin/{claude,codex,pi,sb}
 bin/build-containers all        # base + three flavors (parallel)
+bin/build-containers --no-cache # rebuild without the podman layer cache
 ```
 
 Requires: `podman`, `bash`, `npm` (for version-pin lookups in `build-containers`).
@@ -142,7 +143,7 @@ Per-wrapper overrides:
 | `SB_IMAGE`                 | Override image tag for `run-sb`.                                      |
 | `CLAUDE_SAFE_MODE=1`       | Keep Claude's built-in permission prompts.                            |
 | `CODEX_SAFE_MODE=1`        | Keep Codex's built-in approvals + sandbox.                            |
-| `CLAUDE_NO_CACHE=1`        | Pass `--no-cache` to `podman build`.                                  |
+| `CLAUDE_NO_CACHE=1`        | Pass `--no-cache` to `podman build` (or use `bin/build-containers --no-cache`). |
 | `BASE_IMAGE`               | Override base image tag at build time.                                |
 | `AISB_AUTH_WRITE=1`        | Flip auth mounts to rw and repo to ro (for `login` / token refresh).  |
 | `CLAUDE_AUTH_WRITE=1`      | For `run-claude`, mount the repo ro while Claude auth stays writable. |
@@ -161,8 +162,24 @@ Per-wrapper overrides:
 
 ### Repo-specific base images
 
-A project can opt into its own sandbox base image by adding `.aisb.env` at the
-repo root:
+A project can opt into its own sandbox base image by adding a `Containerfile`
+at the repo root. When `bin/build-containers` is run from that project, or with
+`AISB_WORKSPACE=/path/to/project`, it builds `./Containerfile` as a deterministic
+repo-scoped base image:
+
+```sh
+localhost/aisb-base-<repo-hash>:latest
+```
+
+If `.aisb.env` does not already name a base image, interactive builds prompt to
+create or update it with that generated tag:
+
+```sh
+AISB_BASE_IMAGE=localhost/aisb-base-<repo-hash>:latest
+```
+
+You can also choose your own existing base image by adding `.aisb.env` manually
+at the repo root:
 
 ```sh
 AISB_BASE_IMAGE=localhost/my-project-aisb-base:latest
@@ -171,14 +188,18 @@ AISB_BASE_IMAGE=localhost/my-project-aisb-base:latest
 The file is parsed as data, not sourced as shell. Blank lines and comments are
 allowed; currently only `AISB_BASE_IMAGE` is recognized.
 
-When `AISB_BASE_IMAGE` is present:
+When a repo-specific base image is active:
 
 - `sb` runs that image directly unless `SB_IMAGE` is set.
 - `claude`, `codex`, and `pi` use repo-scoped derived images built from that
   base, such as `localhost/aisb-codex-<repo-hash>:latest`, unless their
   per-wrapper image override is set.
-- `bin/build-containers` uses the repo base as the `BASE_IMAGE` build arg and
-  tags derived tool images with the same repo-scoped names the wrappers expect.
+- `bin/build-containers` builds `./Containerfile` into the generated base tag
+  when that file is the source of the repo base image. For manually configured
+  `AISB_BASE_IMAGE` values, it expects that image to already exist.
+- `bin/build-containers` uses the repo base as the `BASE_IMAGE` build arg for
+  derived tool images and tags those images with the same repo-scoped names the
+  wrappers expect.
 
 Build repo-specific tool images from inside the project repo, or point the build
 script at the project explicitly:

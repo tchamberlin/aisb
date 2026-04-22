@@ -87,7 +87,8 @@ NAME="sb-${BASE}-${HASH}-${STAMP}-$$"
 
 if ! podman image exists "$IMAGE" 2>/dev/null; then
   echo "Error: Image '$IMAGE' not found." >&2
-  if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && -z "${SB_IMAGE:-}" ]]; then
+  if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && -z "${SB_IMAGE:-}" ]] \
+    && ! aisb_repo_base_is_local_containerfile; then
     echo "Build or pull the repo-provided base image, then retry." >&2
   else
     echo "Build it first with:" >&2

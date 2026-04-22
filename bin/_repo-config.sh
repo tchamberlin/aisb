@@ -40,8 +40,24 @@ aisb_load_repo_env() {
   local root="$1"
   local env_file="$root/.aisb.env"
   AISB_REPO_BASE_IMAGE=""
+  # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
+  AISB_REPO_ENV_FILE="$env_file"
+  # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
+  AISB_REPO_ENV_HAS_BASE_IMAGE=0
+  AISB_REPO_CONTAINERFILE=""
+  AISB_REPO_AUTO_BASE_IMAGE=""
 
-  [[ -f "$env_file" ]] || return 0
+  if [[ -f "$root/Containerfile" ]]; then
+    AISB_REPO_CONTAINERFILE="$root/Containerfile"
+    AISB_REPO_AUTO_BASE_IMAGE="$(aisb_auto_base_image "$root")"
+  fi
+
+  if [[ ! -f "$env_file" ]]; then
+    if [[ -n "$AISB_REPO_CONTAINERFILE" ]]; then
+      AISB_REPO_BASE_IMAGE="$AISB_REPO_AUTO_BASE_IMAGE"
+    fi
+    return 0
+  fi
 
   local line key value line_no
   line_no=0
@@ -62,12 +78,18 @@ aisb_load_repo_env() {
     case "$key" in
       AISB_BASE_IMAGE)
         AISB_REPO_BASE_IMAGE="$value"
+        # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
+        AISB_REPO_ENV_HAS_BASE_IMAGE=1
         ;;
       *)
         echo "warn: ignoring unsupported $env_file key '$key'" >&2
         ;;
     esac
   done < "$env_file"
+
+  if [[ -z "$AISB_REPO_BASE_IMAGE" && -n "$AISB_REPO_CONTAINERFILE" ]]; then
+    AISB_REPO_BASE_IMAGE="$AISB_REPO_AUTO_BASE_IMAGE"
+  fi
 }
 
 aisb_tool_default_image() {
@@ -100,6 +122,21 @@ aisb_derived_tool_image() {
   local tool="$1"
   local hash="$2"
   printf 'localhost/aisb-%s-%s:latest\n' "$tool" "$hash"
+}
+
+aisb_auto_base_image() {
+  local root="$1"
+  local hash="${2:-}"
+  if [[ -z "$hash" ]]; then
+    hash="$(aisb_sha1_10 "$root")"
+  fi
+  printf 'localhost/aisb-base-%s:latest\n' "$hash"
+}
+
+aisb_repo_base_is_local_containerfile() {
+  [[ -n "${AISB_REPO_CONTAINERFILE:-}" \
+    && -n "${AISB_REPO_AUTO_BASE_IMAGE:-}" \
+    && "${AISB_REPO_BASE_IMAGE:-}" == "$AISB_REPO_AUTO_BASE_IMAGE" ]]
 }
 
 aisb_resolve_tool_image() {

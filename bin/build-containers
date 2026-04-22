@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Usage:
-#   build-containers [base|claude|codex|pi|all]
+#   build-containers [--no-cache] [base|claude|codex|pi|all]
 #
 # Defaults to `all` when called with no argument. For `all`, the base is
 # built first and then the three flavor images build in parallel. Output
@@ -14,7 +14,8 @@ set -euo pipefail
 #   AISB_WORKSPACE      workspace root to inspect for .aisb.env (default: cwd git root)
 #
 # Each flavor's image tag matches what the run-* wrappers expect:
-#   base    -> localhost/aisb-base:latest, or the repo-provided AISB_BASE_IMAGE
+#   base    -> localhost/aisb-base:latest, repo-provided AISB_BASE_IMAGE,
+#              or localhost/aisb-base-<repo-hash>:latest for a project Containerfile
 #   claude  -> aisb-claude:latest, or localhost/aisb-claude-<repo-hash>:latest
 #   codex   -> aisb-codex:latest, or localhost/aisb-codex-<repo-hash>:latest
 #   pi      -> aisb-pi:latest, or localhost/aisb-pi-<repo-hash>:latest
@@ -25,7 +26,76 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 # shellcheck source=bin/_repo-config.sh
 source "$SCRIPT_DIR/_repo-config.sh"
 
-FLAVOR="${1:-all}"
+usage() {
+  cat <<'EOF'
+Usage:
+  build-containers [--no-cache] [base|claude|codex|pi|all]
+
+Options:
+  --no-cache   Pass --no-cache to podman build
+  -h, --help   Show this help
+EOF
+}
+
+NO_CACHE=0
+FLAVOR="all"
+FLAVOR_SET=0
+while (($#)); do
+  case "$1" in
+    --no-cache)
+      NO_CACHE=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      if (($# == 0)); then
+        break
+      fi
+      if ((FLAVOR_SET)); then
+        echo "error: unexpected argument '$1'" >&2
+        usage >&2
+        exit 2
+      fi
+      FLAVOR="$1"
+      FLAVOR_SET=1
+      shift
+      if (($#)); then
+        echo "error: unexpected argument '$1'" >&2
+        usage >&2
+        exit 2
+      fi
+      break
+      ;;
+    -*)
+      echo "error: unknown option '$1'" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      if ((FLAVOR_SET)); then
+        echo "error: unexpected argument '$1'" >&2
+        usage >&2
+        exit 2
+      fi
+      FLAVOR="$1"
+      FLAVOR_SET=1
+      ;;
+  esac
+  shift
+done
+
+case "$FLAVOR" in
+  base|claude|codex|pi|all)
+    ;;
+  *)
+    echo "error: unknown flavor '$FLAVOR' (expected: base|claude|codex|pi|all)" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
 
 if [[ -n "${AISB_WORKSPACE:-}" ]]; then
   WORKSPACE_ROOT="$AISB_WORKSPACE"
@@ -37,6 +107,47 @@ fi
 WORKSPACE_ROOT="$(realpath "$WORKSPACE_ROOT")"
 WORKSPACE_HASH="$(aisb_sha1_10 "$WORKSPACE_ROOT")"
 aisb_load_repo_env "$WORKSPACE_ROOT"
+
+maybe_prompt_persist_repo_base_image() {
+  [[ -z "${BASE_IMAGE:-}" ]] || return 0
+  [[ -n "${AISB_REPO_CONTAINERFILE:-}" ]] || return 0
+  [[ "${AISB_REPO_ENV_HAS_BASE_IMAGE:-0}" != "1" ]] || return 0
+
+  local env_file="$AISB_REPO_ENV_FILE"
+  local action="Create"
+  if [[ -f "$env_file" ]]; then
+    action="Update"
+  fi
+
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    echo "Detected project Containerfile: $AISB_REPO_CONTAINERFILE"
+    echo "Using repo base image: $AISB_REPO_BASE_IMAGE"
+    echo "To persist this choice, add AISB_BASE_IMAGE=$AISB_REPO_BASE_IMAGE to $env_file"
+    return 0
+  fi
+
+  local reply
+  printf 'Detected project Containerfile: %s\n' "$AISB_REPO_CONTAINERFILE"
+  printf '%s %s with AISB_BASE_IMAGE=%s? [y/N] ' "$action" "$env_file" "$AISB_REPO_BASE_IMAGE"
+  read -r reply || reply=""
+  case "$reply" in
+    y|Y|yes|Yes|YES)
+      ;;
+    *)
+      echo "Using repo base image for this run: $AISB_REPO_BASE_IMAGE"
+      return 0
+      ;;
+  esac
+
+  if [[ -f "$env_file" && -s "$env_file" ]]; then
+    printf '\n' >> "$env_file"
+  fi
+  printf 'AISB_BASE_IMAGE=%s\n' "$AISB_REPO_BASE_IMAGE" >> "$env_file"
+  echo "Wrote $env_file"
+  AISB_REPO_ENV_HAS_BASE_IMAGE=1
+}
+
+maybe_prompt_persist_repo_base_image
 
 BASE_IMAGE_EXPLICIT=0
 if [[ -n "${BASE_IMAGE:-}" ]]; then
@@ -54,9 +165,13 @@ if [[ -n "${AISB_REPO_BASE_IMAGE:-}" ]]; then
 fi
 
 COMMON_FLAGS=()
-if [[ "${CLAUDE_NO_CACHE:-0}" == "1" ]]; then
+if [[ "$NO_CACHE" == "1" || "${CLAUDE_NO_CACHE:-0}" == "1" ]]; then
   COMMON_FLAGS+=(--no-cache)
 fi
+
+repo_base_is_local_containerfile() {
+  [[ "$BASE_IMAGE_EXPLICIT" != "1" ]] && aisb_repo_base_is_local_containerfile
+}
 
 resolve_npm_version() {
   local pkg="$1"
@@ -73,7 +188,8 @@ ensure_base_image() {
     return 0
   fi
 
-  if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && "$BASE_IMAGE_EXPLICIT" != "1" ]]; then
+  if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && "$BASE_IMAGE_EXPLICIT" != "1" ]] \
+    && ! repo_base_is_local_containerfile; then
     echo "error: repo base image '$BASE_IMAGE_TAG' from $WORKSPACE_ROOT/.aisb.env was not found" >&2
     echo "Build or pull that image first, then retry." >&2
     return 1
@@ -86,6 +202,12 @@ ensure_base_image() {
 build_one() {
   local flavor="$1"
   local containerfile="$REPO_ROOT/Containerfile.$flavor"
+  local build_context="$REPO_ROOT"
+
+  if [[ "$flavor" == "base" ]] && repo_base_is_local_containerfile; then
+    containerfile="$AISB_REPO_CONTAINERFILE"
+    build_context="$WORKSPACE_ROOT"
+  fi
 
   if [[ ! -f "$containerfile" ]]; then
     echo "error: $containerfile not found" >&2
@@ -98,7 +220,8 @@ build_one() {
   case "$flavor" in
     base)
       tag="$BASE_IMAGE_TAG"
-      if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && "$BASE_IMAGE_EXPLICIT" != "1" ]]; then
+      if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && "$BASE_IMAGE_EXPLICIT" != "1" ]] \
+        && ! repo_base_is_local_containerfile; then
         if ! podman image exists "$BASE_IMAGE_TAG"; then
           echo "error: repo base image '$BASE_IMAGE_TAG' from $WORKSPACE_ROOT/.aisb.env was not found" >&2
           echo "Build or pull that image first, then retry." >&2
@@ -106,6 +229,9 @@ build_one() {
         fi
         echo "Using repo-provided base image: $BASE_IMAGE_TAG"
         return 0
+      fi
+      if repo_base_is_local_containerfile; then
+        echo "Using project Containerfile as repo base: $AISB_REPO_CONTAINERFILE"
       fi
       ;;
     claude)
@@ -158,7 +284,7 @@ build_one() {
     "${flags[@]}" \
     -t "$tag" \
     -f "$containerfile" \
-    "$REPO_ROOT"
+    "$build_context"
 }
 
 case "$FLAVOR" in
