@@ -9,8 +9,8 @@ done
 SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 
 TOOL="claude"
-USER_NAME="sb"
-USER_HOME="/home/sb"
+USER_NAME="aisb-$TOOL"
+USER_HOME="/home/$USER_NAME"
 
 # shellcheck source=bin/_run-common.sh
 source "$SCRIPT_DIR/_run-common.sh"
