@@ -15,6 +15,14 @@ USER_HOME="/home/sb"
 # shellcheck source=bin/_run-common.sh
 source "$SCRIPT_DIR/_run-common.sh"
 common_init
+
+common_require_mount_path "$HOME/.claude.json" "Claude host config source path"
+common_require_mount_path "${USER_HOME}/.claude.json" "Claude host config destination path"
+common_require_mount_path "$HOME/.claude/settings.json" "Claude settings source path"
+common_require_mount_path "${USER_HOME}/.claude/settings.json" "Claude settings destination path"
+common_require_mount_path "$HOME/.claude/.credentials.json" "Claude credentials source path"
+common_require_mount_path "${USER_HOME}/.claude/.credentials.json" "Claude credentials destination path"
+
 common_check_image
 
 # Ensure host-side files exist. .credentials.json is bind-mounted rw so OAuth
@@ -31,6 +39,10 @@ CLAUDE_DIR="${STATE_BASE}/claude/${HASH}/dot-claude"
 mkdir -p "$CLAUDE_DIR"
 # Placeholder target for the settings.json file bind-mount below.
 touch "$CLAUDE_DIR/settings.json"
+
+common_require_mount_path "$CLAUDE_DIR" "Claude state source path"
+common_require_mount_path "${USER_HOME}/.claude" "Claude state destination path"
+common_require_mount_path "${CLAUDE_DIR}/claude.json" "Claude repo config source path"
 
 # Seed per-repo .claude.json from host on first run, else create an empty
 # placeholder so the bind-mount target exists.

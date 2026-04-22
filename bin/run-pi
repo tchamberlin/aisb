@@ -15,6 +15,31 @@ USER_HOME="/home/pi"
 # shellcheck source=bin/_run-common.sh
 source "$SCRIPT_DIR/_run-common.sh"
 common_init
+
+# Repo-local models.json override — lets a repo pin custom model definitions
+# without mutating shared pi state.
+PROJECT_MODELS="$ROOT/.pi/agent/models.json"
+PROJECT_MODELS_ENABLED=0
+PROJECT_MODELS_OPTS=""
+if [[ -L "$PROJECT_MODELS" ]]; then
+  echo "Error: refusing symlinked repo pi models file: $PROJECT_MODELS" >&2
+  exit 1
+fi
+if [[ -f "$PROJECT_MODELS" ]]; then
+  PROJECT_MODELS_REAL="$(realpath "$PROJECT_MODELS")"
+  if [[ "$PROJECT_MODELS_REAL" != "$ROOT" && "$PROJECT_MODELS_REAL" != "$ROOT"/* ]]; then
+    echo "Error: refusing repo pi models file outside workspace: $PROJECT_MODELS -> $PROJECT_MODELS_REAL" >&2
+    exit 1
+  fi
+  common_require_mount_path "$PROJECT_MODELS" "pi models source path"
+  common_require_mount_path "${USER_HOME}/.pi/agent/models.json" "pi models destination path"
+  PROJECT_MODELS_ENABLED=1
+  PROJECT_MODELS_OPTS="ro,nosuid,nodev,noexec"
+  if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
+    PROJECT_MODELS_OPTS+=",z"
+  fi
+fi
+
 common_check_image
 
 # Pi has no persistent host auth file — API keys are forwarded via env.
@@ -24,18 +49,14 @@ mkdir -p "$HOME/.pi/agent"
 PI_DIR="${STATE_BASE}/pi/${HASH}/dot-pi-agent"
 mkdir -p "$PI_DIR"
 
+common_require_mount_path "$PI_DIR" "pi state source path"
+common_require_mount_path "${USER_HOME}/.pi/agent" "pi state destination path"
+
 TOOL_MOUNTS=(
   -v "${PI_DIR}:${USER_HOME}/.pi/agent:rw,nosuid,nodev,noexec,z"
 )
 
-# Repo-local models.json override — lets a repo pin custom model definitions
-# without mutating shared pi state.
-PROJECT_MODELS="$ROOT/.pi/agent/models.json"
-if [[ -f "$PROJECT_MODELS" ]]; then
-  PROJECT_MODELS_OPTS="ro,nosuid,nodev,noexec"
-  if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
-    PROJECT_MODELS_OPTS+=",z"
-  fi
+if [[ "$PROJECT_MODELS_ENABLED" == "1" ]]; then
   TOOL_MOUNTS+=(-v "${PROJECT_MODELS}:${USER_HOME}/.pi/agent/models.json:${PROJECT_MODELS_OPTS}")
 fi
 
@@ -51,7 +72,7 @@ done
 
 if [[ "${AISB_QUIET:-0}" != "1" ]]; then
   echo "[aisb:pi] pi state: $PI_DIR" >&2
-  if [[ -f "$PROJECT_MODELS" ]]; then
+  if [[ "$PROJECT_MODELS_ENABLED" == "1" ]]; then
     echo "[aisb:pi] pi models: $PROJECT_MODELS (repo override)" >&2
   else
     echo "[aisb:pi] pi models: default" >&2

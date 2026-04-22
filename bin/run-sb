@@ -27,50 +27,10 @@ while [[ -L "$SCRIPT_SOURCE" ]]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 
-# shellcheck source=bin/_repo-config.sh
-source "$SCRIPT_DIR/_repo-config.sh"
+TOOL="sb"
 
-die_dangerous_root() {
-  local root="$1"
-  echo "Error: refusing to run sb with dangerous workspace root: $root" >&2
-  echo >&2
-  echo "This wrapper bind-mounts the workspace into a container." >&2
-  echo "Run it from a project directory or git repository instead." >&2
-  echo "To override intentionally, set AISB_ALLOW_DANGEROUS_ROOT=1." >&2
-  exit 1
-}
-
-check_workspace_root() {
-  local root="$1"
-  local home_real xdg_data containers_real dangerous
-  dangerous=0
-
-  home_real="$(realpath "$HOME" 2>/dev/null || printf '%s' "$HOME")"
-  xdg_data="${XDG_DATA_HOME:-$HOME/.local/share}"
-  containers_real="$(realpath "$xdg_data/containers" 2>/dev/null || true)"
-
-  case "$root" in
-    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var|/Users)
-      dangerous=1
-      ;;
-  esac
-
-  if [[ "$root" == "$home_real" ]]; then
-    dangerous=1
-  fi
-
-  if [[ -n "$containers_real" && ( "$root" == "$containers_real" || "$root" == "$containers_real"/* ) ]]; then
-    dangerous=1
-  fi
-
-  if (( dangerous )); then
-    if [[ "${AISB_ALLOW_DANGEROUS_ROOT:-0}" == "1" ]]; then
-      echo "warn: AISB_ALLOW_DANGEROUS_ROOT=1; allowing workspace root '$root'" >&2
-      return 0
-    fi
-    die_dangerous_root "$root"
-  fi
-}
+# shellcheck source=bin/_run-common.sh
+source "$SCRIPT_DIR/_run-common.sh"
 
 log_startup() {
   [[ "${AISB_QUIET:-0}" == "1" ]] && return 0
@@ -123,7 +83,7 @@ else
   ROOT="$PWD"
 fi
 ROOT="$(realpath "$ROOT")"
-check_workspace_root "$ROOT"
+common_check_workspace_root "$ROOT"
 
 BASE="$(aisb_workspace_base "$ROOT")"
 HASH="$(aisb_sha1_10 "$ROOT")"
@@ -132,33 +92,29 @@ IMAGE="$(aisb_resolve_tool_image sb "$HASH")"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 NAME="sb-${BASE}-${HASH}-${STAMP}-$$"
 
-if ! podman image exists "$IMAGE" 2>/dev/null; then
-  echo "Error: Image '$IMAGE' not found." >&2
-  if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && -z "${SB_IMAGE:-}" ]] \
-    && ! aisb_repo_base_is_local_containerfile; then
-    echo "Build or pull the repo-provided base image, then retry." >&2
-  else
-    echo "Build it first with:" >&2
-    echo "  $(aisb_build_command_hint "$SCRIPT_DIR" "$ROOT" base)" >&2
-  fi
-  exit 1
-fi
-
 CACHE_BASE="${XDG_CACHE_HOME:-$HOME/.cache}/claude-podman"
 STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/claude-podman"
 UV_CACHE="${CACHE_BASE}/uv/${HASH}"
 UV_PYTHON_DIR="${STATE_BASE}/uv-python/${HASH}"
 VENV_DIR="${STATE_BASE}/venvs/${HASH}/${STAMP}-$$"
 TMP_DIR="${STATE_BASE}/sb/${HASH}/tmp/${STAMP}-$$"
+
+common_require_mount_path "$ROOT" "workspace source path"
+common_require_mount_path "$ROOT" "workspace destination path"
+common_require_mount_path "$TMP_DIR" "temporary directory source path"
+common_require_mount_path "/tmp" "temporary directory destination path"
+common_require_mount_path "$UV_CACHE" "uv cache source path"
+common_require_mount_path "/uv-cache" "uv cache destination path"
+common_require_mount_path "$UV_PYTHON_DIR" "uv python source path"
+common_require_mount_path "/uv-python" "uv python destination path"
+common_require_mount_path "$VENV_DIR" "venv source path"
+common_require_mount_path "/venv" "venv destination path"
+
 mkdir -p "$UV_CACHE" "$UV_PYTHON_DIR" "$VENV_DIR" "$TMP_DIR"
 chmod 1777 "$TMP_DIR"
 
-# Prune per-invocation dirs. Guard against empty path components so a future
-# refactor can't let `find` descend into / or $HOME.
-if [[ -n "$STATE_BASE" && -n "$HASH" ]]; then
-  find "${STATE_BASE}/venvs/${HASH}" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
-  find "${STATE_BASE}/sb/${HASH}/tmp" -mindepth 1 -maxdepth 1 -type d -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
-fi
+common_prune_old_dirs "${STATE_BASE}/venvs/${HASH}" "$STATE_BASE" -mtime +7
+common_prune_old_dirs "${STATE_BASE}/sb/${HASH}/tmp" "$STATE_BASE" -mmin +1440
 
 # Forward common API keys + editor prefs
 ENV_OPTS=()
@@ -181,7 +137,21 @@ elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
 fi
 GH_HOST_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
 if [[ -d "$GH_HOST_CONFIG" ]]; then
+  common_require_mount_path "$GH_HOST_CONFIG" "GitHub CLI config source path"
+  common_require_mount_path "/home/sb/.config/gh" "GitHub CLI config destination path"
   GH_OPTS+=(-v "${GH_HOST_CONFIG}:/home/sb/.config/gh:ro,nosuid,nodev,noexec")
+fi
+
+if ! podman image exists "$IMAGE" 2>/dev/null; then
+  echo "Error: Image '$IMAGE' not found." >&2
+  if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && -z "${SB_IMAGE:-}" ]] \
+    && ! aisb_repo_base_is_local_containerfile; then
+    echo "Build or pull the repo-provided base image, then retry." >&2
+  else
+    echo "Build it first with:" >&2
+    echo "  $(aisb_build_command_hint "$SCRIPT_DIR" "$ROOT" base)" >&2
+  fi
+  exit 1
 fi
 
 # Interactive only if stdin is a tty
@@ -221,7 +191,11 @@ if [[ "${AISB_NO_NETWORK:-0}" == "1" ]]; then
 fi
 
 WORKSPACE_MOUNT_OPTS="rw,nosuid,nodev"
+if [[ "${AISB_WORKSPACE_READONLY:-0}" == "1" ]]; then
+  WORKSPACE_MOUNT_OPTS="ro,nosuid,nodev"
+fi
 if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
+  common_check_workspace_relabel "$ROOT"
   WORKSPACE_MOUNT_OPTS+=",z"
 fi
 

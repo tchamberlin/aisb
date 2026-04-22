@@ -139,10 +139,7 @@ maybe_prompt_persist_repo_base_image() {
       ;;
   esac
 
-  if [[ -f "$env_file" && -s "$env_file" ]]; then
-    printf '\n' >> "$env_file"
-  fi
-  printf 'AISB_BASE_IMAGE=%s\n' "$AISB_REPO_BASE_IMAGE" >> "$env_file"
+  aisb_append_repo_base_image "$WORKSPACE_ROOT" "$AISB_REPO_BASE_IMAGE"
   echo "Wrote $env_file"
   AISB_REPO_ENV_HAS_BASE_IMAGE=1
 }

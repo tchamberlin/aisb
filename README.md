@@ -50,7 +50,8 @@ The wrappers:
 - mount the current repo read-write at its real path. Agent wrappers
   (`claude`, `codex`, `pi`) require a git repository by default; `sb` may use a
   narrow non-git `$PWD`. All wrappers refuse broad roots such as `/` and
-  `$HOME`.
+  `$HOME`. Set `AISB_WORKSPACE_READONLY=1` for audit/review/exploration runs
+  where the agent should not mutate the repo.
 - forward API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `TOGETHER_API_KEY`, …) and `gh` auth
 - mount Claude's host auth files (`~/.claude/.credentials.json`,
@@ -73,7 +74,9 @@ The wrappers:
 - do not relabel the workspace mount by default; on SELinux hosts this may
   fail closed with permission denied instead of changing host labels. Set
   `AISB_RELABEL_WORKSPACE=1` only for a narrow project directory that you
-  intentionally want Podman to relabel.
+  intentionally want Podman to relabel. `AISB_ALLOW_DANGEROUS_ROOT=1` does not
+  allow relabeling a broad root; that requires the separate
+  `AISB_ALLOW_DANGEROUS_RELABEL=1` escape hatch.
 
 ## Hardening
 
@@ -94,6 +97,23 @@ The container is the sandbox, so agent-internal approval prompts are bypassed
 (`--dangerously-skip-permissions` for Claude, `--dangerously-bypass-approvals-and-sandbox`
 for Codex). Set `CLAUDE_SAFE_MODE=1` / `CODEX_SAFE_MODE=1` to keep them enabled.
 
+### Host mutation guardrails
+
+The wrappers fail closed for several host-mutation hazards:
+
+- broad workspace roots such as `/`, `/home`, `/tmp`, `$HOME`, the passwd
+  database home for the current UID, and rootless container storage paths are
+  refused unless `AISB_ALLOW_DANGEROUS_ROOT=1` is set
+- SELinux relabeling of broad roots is refused even with
+  `AISB_ALLOW_DANGEROUS_ROOT=1`, unless
+  `AISB_ALLOW_DANGEROUS_RELABEL=1` is also set
+- repo-controlled `.aisb.env`, repo `Containerfile`, and repo pi
+  `.pi/agent/models.json` symlinks are refused
+- bind mount source or destination paths containing `:` are refused because
+  Podman `-v` parsing would be ambiguous
+- `AISB_WORKSPACE_READONLY=1` mounts the workspace `ro,nosuid,nodev` for runs
+  that should inspect rather than edit files
+
 ### What this does not protect against
 
 The host is isolated from the agent, but the agent still operates with
@@ -112,6 +132,12 @@ the sandbox with sensitive material:
   wrappers need the network for API calls and do not support this.
 - **The mounted repo is read-write.** An agent can modify files, commit, and
   (if `GH_TOKEN` or `gh` auth is present) push malicious commits upstream.
+  `AISB_WORKSPACE_READONLY=1` makes the repo mount read-only for review-style
+  runs, but normal coding sessions keep it writable so agents can edit files.
+- **Strict seccomp is not deletion prevention.** `AISB_STRICT_SECCOMP=1` adds
+  syscall denies on top of Podman's default profile, but it cannot block normal
+  write, unlink, rename, or truncate operations while the repo mount is
+  writable; those are required for ordinary editing workflows.
 - **SELinux relabeling is opt-in for the repo.** The wrappers still use
   relabeling for wrapper-owned state/cache directories, but not for the
   workspace mount unless `AISB_RELABEL_WORKSPACE=1` is set. If a previous run
@@ -158,7 +184,9 @@ Per-wrapper overrides:
 | `PI_AUTH_WRITE=1`          | As above, for `run-pi` only (no-op on auth but flips repo to ro).     |
 | `AISB_AUTH_WRITE_KEEP_REPO_RW=1` | In auth-write mode, keep the repo writable.                     |
 | `AISB_ALLOW_NON_GIT_WORKSPACE=1` | Allow agent wrappers from a non-git `$PWD`.                    |
-| `AISB_ALLOW_DANGEROUS_ROOT=1` | Allow broad workspace roots like `$HOME` or `/` intentionally.     |
+| `AISB_ALLOW_DANGEROUS_ROOT=1` | Allow broad workspace roots like `$HOME` or `/` intentionally. Does not permit relabeling. |
+| `AISB_ALLOW_DANGEROUS_RELABEL=1` | With `AISB_RELABEL_WORKSPACE=1`, allow SELinux relabeling of a dangerous root. |
+| `AISB_WORKSPACE_READONLY=1` | Mount the workspace `ro,nosuid,nodev` for audit/review/exploration runs. |
 | `AISB_DEBUG=1`             | Include detailed mount/auth/hardening diagnostics in startup logs. |
 | `AISB_QUIET=1`             | Suppress wrapper startup summary logs.                            |
 | `AISB_RELABEL_WORKSPACE=1` | Add `:z` to the workspace mount for SELinux relabeling.               |

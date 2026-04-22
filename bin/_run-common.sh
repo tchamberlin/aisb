@@ -108,6 +108,8 @@ common_init() {
   WORKSPACE_PYTEST_CACHE_DIR="${STATE_BASE}/${TOOL}/${HASH}/pytest"
   WORKSPACE_TMP_DIR="${STATE_BASE}/${TOOL}/${HASH}/tmp/${STAMP}-$$"
 
+  common_check_workspace_bind_paths
+
   mkdir -p \
     "$WORKSPACE_CACHE_DIR" \
     "$WORKSPACE_STATE_DIR" \
@@ -118,13 +120,8 @@ common_init() {
     "$WORKSPACE_TMP_DIR"
   chmod 1777 "$WORKSPACE_TMP_DIR"
 
-  # Prune per-invocation dirs, scoped per tool so tools don't blow away each
-  # other's caches. Guard against empty path components so a future refactor
-  # can't let `find` descend into / or $HOME.
-  if [[ -n "$STATE_BASE" && -n "$TOOL" && -n "$HASH" ]]; then
-    find "${STATE_BASE}/${TOOL}/${HASH}/venvs" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
-    find "${STATE_BASE}/${TOOL}/${HASH}/tmp" -mindepth 1 -maxdepth 1 -type d -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
-  fi
+  common_prune_old_dirs "${STATE_BASE}/${TOOL}/${HASH}/venvs" "$STATE_BASE" -mtime +7
+  common_prune_old_dirs "${STATE_BASE}/${TOOL}/${HASH}/tmp" "$STATE_BASE" -mmin +1440
 
   local tool_upper tool_auth_var
   tool_upper="${TOOL^^}"
@@ -139,9 +136,13 @@ common_init() {
     AUTH_MODE="ro"
     REPO_MODE="rw"
   fi
+  if [[ "${AISB_WORKSPACE_READONLY:-0}" == "1" ]]; then
+    REPO_MODE="ro"
+  fi
 
   WORKSPACE_MOUNT_OPTS="${REPO_MODE},nosuid,nodev"
   if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
+    common_check_workspace_relabel "$ROOT"
     WORKSPACE_MOUNT_OPTS+=",z"
   fi
 
@@ -217,35 +218,176 @@ common_die_dangerous_root() {
   exit 1
 }
 
-common_check_workspace_root() {
-  local root="$1"
-  local home_real xdg_data containers_real dangerous
-  dangerous=0
+common_realpath() {
+  realpath "$1" 2>/dev/null || printf '%s' "$1"
+}
 
-  home_real="$(realpath "$HOME" 2>/dev/null || printf '%s' "$HOME")"
-  xdg_data="${XDG_DATA_HOME:-$HOME/.local/share}"
-  containers_real="$(realpath "$xdg_data/containers" 2>/dev/null || true)"
+common_realpath_m() {
+  realpath -m "$1" 2>/dev/null || common_realpath "$1"
+}
+
+common_passwd_home() {
+  getent passwd "$(id -u)" 2>/dev/null | awk -F: '{print $6; exit}'
+}
+
+common_path_is_broad_or_home() {
+  local root="$1"
+  local home_real passwd_home passwd_home_real
+
+  root="$(common_realpath_m "$root")"
+
+  home_real="$(common_realpath_m "$HOME")"
+  passwd_home="$(common_passwd_home || true)"
+  passwd_home_real=""
+  if [[ -n "$passwd_home" ]]; then
+    passwd_home_real="$(common_realpath_m "$passwd_home")"
+  fi
 
   case "$root" in
     /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var|/Users)
-      dangerous=1
+      return 0
       ;;
   esac
 
   if [[ "$root" == "$home_real" ]]; then
-    dangerous=1
+    return 0
   fi
 
+  if [[ -n "$passwd_home_real" && "$root" == "$passwd_home_real" ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+common_workspace_root_is_dangerous() {
+  local root="$1"
+  local xdg_data containers_real passwd_home passwd_containers_real
+
+  root="$(common_realpath_m "$root")"
+
+  if common_path_is_broad_or_home "$root"; then
+    return 0
+  fi
+
+  xdg_data="${XDG_DATA_HOME:-$HOME/.local/share}"
+  containers_real="$(common_realpath_m "$xdg_data/containers")"
   if [[ -n "$containers_real" && ( "$root" == "$containers_real" || "$root" == "$containers_real"/* ) ]]; then
-    dangerous=1
+    return 0
   fi
 
-  if (( dangerous )); then
+  passwd_home="$(common_passwd_home || true)"
+  if [[ -n "$passwd_home" ]]; then
+    passwd_containers_real="$(common_realpath_m "$passwd_home/.local/share/containers")"
+    if [[ "$root" == "$passwd_containers_real" || "$root" == "$passwd_containers_real"/* ]]; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+common_check_workspace_root() {
+  local root="$1"
+
+  if common_workspace_root_is_dangerous "$root"; then
     if [[ "${AISB_ALLOW_DANGEROUS_ROOT:-0}" == "1" ]]; then
       echo "warn: AISB_ALLOW_DANGEROUS_ROOT=1; allowing workspace root '$root'" >&2
       return 0
     fi
     common_die_dangerous_root "$root"
+  fi
+}
+
+common_check_workspace_relabel() {
+  local root="$1"
+
+  if common_workspace_root_is_dangerous "$root"; then
+    if [[ "${AISB_ALLOW_DANGEROUS_RELABEL:-0}" == "1" ]]; then
+      echo "warn: AISB_ALLOW_DANGEROUS_RELABEL=1; allowing SELinux relabel of dangerous workspace root '$root'" >&2
+      return 0
+    fi
+    echo "Error: refusing to relabel dangerous workspace root: $root" >&2
+    echo >&2
+    echo "AISB_ALLOW_DANGEROUS_ROOT=1 allows the bind mount, but does not permit broad SELinux relabeling." >&2
+    echo "Run from a narrow project directory, unset AISB_RELABEL_WORKSPACE, or set AISB_ALLOW_DANGEROUS_RELABEL=1 intentionally." >&2
+    exit 1
+  fi
+}
+
+common_require_mount_path() {
+  local path="$1"
+  local description="$2"
+
+  if [[ "$path" == *:* ]]; then
+    echo "Error: refusing bind mount with ':' in $description: $path" >&2
+    echo "Podman -v uses ':' to separate source, destination, and options; paths containing ':' are ambiguous." >&2
+    exit 1
+  fi
+}
+
+common_check_workspace_bind_paths() {
+  common_require_mount_path "$ROOT" "workspace source path"
+  common_require_mount_path "$ROOT" "workspace destination path"
+  common_require_mount_path "$WORKSPACE_TMP_DIR" "temporary directory source path"
+  common_require_mount_path "/tmp" "temporary directory destination path"
+  common_require_mount_path "$WORKSPACE_CACHE_DIR" "cache source path"
+  common_require_mount_path "/aisb-${TOOL}/cache" "cache destination path"
+  common_require_mount_path "$WORKSPACE_STATE_DIR" "state source path"
+  common_require_mount_path "/aisb-${TOOL}/state" "state destination path"
+  common_require_mount_path "$WORKSPACE_UV_CACHE_DIR" "uv cache source path"
+  common_require_mount_path "/aisb-${TOOL}/uv-cache" "uv cache destination path"
+  common_require_mount_path "$WORKSPACE_UV_PYTHON_DIR" "uv python source path"
+  common_require_mount_path "/aisb-${TOOL}/uv-python" "uv python destination path"
+  common_require_mount_path "$WORKSPACE_VENV_DIR" "venv source path"
+  common_require_mount_path "/aisb-${TOOL}/venv" "venv destination path"
+  common_require_mount_path "$WORKSPACE_PYTEST_CACHE_DIR" "pytest cache source path"
+  common_require_mount_path "/aisb-${TOOL}/pytest" "pytest cache destination path"
+}
+
+common_validate_prune_root() {
+  local prune_root="$1"
+  local expected_state_base="$2"
+  local prune_real state_real
+
+  if [[ "$prune_root" != /* ]]; then
+    echo "warn: skipping prune for non-absolute path: $prune_root" >&2
+    return 1
+  fi
+
+  prune_real="$(common_realpath_m "$prune_root")"
+  state_real="$(common_realpath_m "$expected_state_base")"
+
+  if [[ "$prune_real" == "/" ]]; then
+    echo "warn: skipping prune for root path: $prune_root" >&2
+    return 1
+  fi
+
+  if common_path_is_broad_or_home "$prune_real"; then
+    echo "warn: skipping prune for broad host path: $prune_root" >&2
+    return 1
+  fi
+
+  if [[ "$(basename "$state_real")" != "claude-podman" ]]; then
+    echo "warn: skipping prune outside expected claude-podman state base: $prune_root" >&2
+    return 1
+  fi
+
+  if [[ "$prune_real" != "$state_real"/* ]]; then
+    echo "warn: skipping prune outside state base $state_real: $prune_root" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+common_prune_old_dirs() {
+  local prune_root="$1"
+  local expected_state_base="$2"
+  shift 2
+
+  if common_validate_prune_root "$prune_root" "$expected_state_base"; then
+    find "$prune_root" -mindepth 1 -maxdepth 1 -type d "$@" -exec rm -rf {} + 2>/dev/null || true
   fi
 }
 
@@ -283,6 +425,8 @@ _common_append_gh() {
   fi
   local gh_host_config="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
   if [[ -d "$gh_host_config" ]]; then
+    common_require_mount_path "$gh_host_config" "GitHub CLI config source path"
+    common_require_mount_path "${USER_HOME}/.config/gh" "GitHub CLI config destination path"
     COMMON_PODMAN_ARGS+=(-v "${gh_host_config}:${USER_HOME}/.config/gh:${AUTH_MODE},nosuid,nodev,noexec")
   fi
 }

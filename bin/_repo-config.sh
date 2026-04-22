@@ -39,6 +39,8 @@ aisb_trim() {
 aisb_load_repo_env() {
   local root="$1"
   local env_file="$root/.aisb.env"
+  local containerfile="$root/Containerfile"
+  local containerfile_is_symlink=0
   AISB_REPO_BASE_IMAGE=""
   # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
   AISB_REPO_ENV_FILE="$env_file"
@@ -47,12 +49,23 @@ aisb_load_repo_env() {
   AISB_REPO_CONTAINERFILE=""
   AISB_REPO_AUTO_BASE_IMAGE=""
 
-  if [[ -f "$root/Containerfile" ]]; then
-    AISB_REPO_CONTAINERFILE="$root/Containerfile"
+  if [[ -L "$env_file" ]]; then
+    echo "error: refusing symlinked repo config file: $env_file" >&2
+    return 1
+  fi
+
+  if [[ -L "$containerfile" ]]; then
+    containerfile_is_symlink=1
+  elif [[ -f "$containerfile" ]]; then
+    AISB_REPO_CONTAINERFILE="$containerfile"
     AISB_REPO_AUTO_BASE_IMAGE="$(aisb_auto_base_image "$root")"
   fi
 
   if [[ ! -f "$env_file" ]]; then
+    if (( containerfile_is_symlink )); then
+      echo "error: refusing symlinked repo Containerfile as base image source: $containerfile" >&2
+      return 1
+    fi
     if [[ -n "$AISB_REPO_CONTAINERFILE" ]]; then
       AISB_REPO_BASE_IMAGE="$AISB_REPO_AUTO_BASE_IMAGE"
     fi
@@ -89,7 +102,46 @@ aisb_load_repo_env() {
 
   if [[ -z "$AISB_REPO_BASE_IMAGE" && -n "$AISB_REPO_CONTAINERFILE" ]]; then
     AISB_REPO_BASE_IMAGE="$AISB_REPO_AUTO_BASE_IMAGE"
+  elif [[ -z "$AISB_REPO_BASE_IMAGE" && "$containerfile_is_symlink" == "1" ]]; then
+    echo "error: refusing symlinked repo Containerfile as base image source: $containerfile" >&2
+    return 1
   fi
+}
+
+aisb_append_repo_base_image() {
+  local root="$1"
+  local image="$2"
+  local env_file="$root/.aisb.env"
+  local root_real env_real env_dir
+
+  root_real="$(realpath "$root")"
+  env_real="$(realpath -m "$env_file")"
+
+  if [[ "$env_real" != "$root_real/.aisb.env" ]]; then
+    echo "error: refusing to write repo config outside workspace: $env_file" >&2
+    return 1
+  fi
+
+  if [[ -L "$env_file" ]]; then
+    echo "error: refusing to write symlinked repo config file: $env_file" >&2
+    return 1
+  fi
+
+  if [[ -e "$env_file" && ! -f "$env_file" ]]; then
+    echo "error: refusing to write repo config because path is not a regular file: $env_file" >&2
+    return 1
+  fi
+
+  env_dir="$(dirname "$env_file")"
+  if [[ "$(realpath "$env_dir")" != "$root_real" ]]; then
+    echo "error: refusing to write repo config outside workspace: $env_file" >&2
+    return 1
+  fi
+
+  if [[ -f "$env_file" && -s "$env_file" ]]; then
+    printf '\n' >> "$env_file"
+  fi
+  printf 'AISB_BASE_IMAGE=%s\n' "$image" >> "$env_file"
 }
 
 aisb_tool_default_image() {

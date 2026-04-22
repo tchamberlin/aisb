@@ -15,6 +15,12 @@ USER_HOME="/home/codex"
 # shellcheck source=bin/_run-common.sh
 source "$SCRIPT_DIR/_run-common.sh"
 common_init
+
+common_require_mount_path "$HOME/.codex/auth.json" "Codex auth source path"
+common_require_mount_path "${USER_HOME}/.codex/auth.json" "Codex auth destination path"
+common_require_mount_path "$HOME/.codex/config.toml" "Codex config source path"
+common_require_mount_path "${USER_HOME}/.codex/config.toml" "Codex config destination path"
+
 common_check_image
 
 # Only auth.json + config.toml are shared across repos (OAuth token + user
@@ -25,6 +31,9 @@ touch "$HOME/.codex/config.toml"
 
 CODEX_DIR="${STATE_BASE}/codex/${HASH}/dot-codex"
 mkdir -p "$CODEX_DIR"
+
+common_require_mount_path "$CODEX_DIR" "Codex state source path"
+common_require_mount_path "${USER_HOME}/.codex" "Codex state destination path"
 
 TOOL_MOUNTS=(
   -v "${CODEX_DIR}:${USER_HOME}/.codex:rw,nosuid,nodev,noexec,z"
