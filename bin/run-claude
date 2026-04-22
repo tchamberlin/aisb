@@ -11,7 +11,6 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 TOOL="claude"
 USER_NAME="sb"
 USER_HOME="/home/sb"
-IMAGE="${CLAUDE_IMAGE:-claude-uv:latest}"
 
 # shellcheck source=bin/_run-common.sh
 source "$SCRIPT_DIR/_run-common.sh"

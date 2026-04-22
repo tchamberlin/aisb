@@ -11,19 +11,47 @@ set -euo pipefail
 # Env vars:
 #   CLAUDE_NO_CACHE=1   pass --no-cache to podman build
 #   BASE_IMAGE          override base image tag (default: localhost/aisb-base:latest)
+#   AISB_WORKSPACE      workspace root to inspect for .aisb.env (default: cwd git root)
 #
 # Each flavor's image tag matches what the run-* wrappers expect:
-#   base    -> aisb-base:latest
-#   claude  -> claude-uv:latest
-#   codex   -> codex-uv:latest
-#   pi      -> pi-uv:latest
+#   base    -> localhost/aisb-base:latest, or the repo-provided AISB_BASE_IMAGE
+#   claude  -> aisb-claude:latest, or localhost/aisb-claude-<repo-hash>:latest
+#   codex   -> aisb-codex:latest, or localhost/aisb-codex-<repo-hash>:latest
+#   pi      -> aisb-pi:latest, or localhost/aisb-pi-<repo-hash>:latest
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# shellcheck source=bin/_repo-config.sh
+source "$SCRIPT_DIR/_repo-config.sh"
+
 FLAVOR="${1:-all}"
 
-BASE_IMAGE_TAG="${BASE_IMAGE:-localhost/aisb-base:latest}"
+if [[ -n "${AISB_WORKSPACE:-}" ]]; then
+  WORKSPACE_ROOT="$AISB_WORKSPACE"
+elif git rev-parse --show-toplevel >/dev/null 2>&1; then
+  WORKSPACE_ROOT="$(git rev-parse --show-toplevel)"
+else
+  WORKSPACE_ROOT="$PWD"
+fi
+WORKSPACE_ROOT="$(realpath "$WORKSPACE_ROOT")"
+WORKSPACE_HASH="$(aisb_sha1_10 "$WORKSPACE_ROOT")"
+aisb_load_repo_env "$WORKSPACE_ROOT"
+
+BASE_IMAGE_EXPLICIT=0
+if [[ -n "${BASE_IMAGE:-}" ]]; then
+  BASE_IMAGE_EXPLICIT=1
+  BASE_IMAGE_TAG="$BASE_IMAGE"
+elif [[ -n "${AISB_REPO_BASE_IMAGE:-}" ]]; then
+  BASE_IMAGE_TAG="$AISB_REPO_BASE_IMAGE"
+else
+  BASE_IMAGE_TAG="localhost/aisb-base:latest"
+fi
+
+REPO_SCOPED_TOOL_IMAGES=0
+if [[ -n "${AISB_REPO_BASE_IMAGE:-}" ]]; then
+  REPO_SCOPED_TOOL_IMAGES=1
+fi
 
 COMMON_FLAGS=()
 if [[ "${CLAUDE_NO_CACHE:-0}" == "1" ]]; then
@@ -38,6 +66,21 @@ resolve_npm_version() {
     return 1
   fi
   printf '%s' "$version"
+}
+
+ensure_base_image() {
+  if podman image exists "$BASE_IMAGE_TAG"; then
+    return 0
+  fi
+
+  if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && "$BASE_IMAGE_EXPLICIT" != "1" ]]; then
+    echo "error: repo base image '$BASE_IMAGE_TAG' from $WORKSPACE_ROOT/.aisb.env was not found" >&2
+    echo "Build or pull that image first, then retry." >&2
+    return 1
+  fi
+
+  echo "Base image '$BASE_IMAGE_TAG' not found; building it first."
+  build_one base
 }
 
 build_one() {
@@ -55,26 +98,50 @@ build_one() {
   case "$flavor" in
     base)
       tag="$BASE_IMAGE_TAG"
+      if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && "$BASE_IMAGE_EXPLICIT" != "1" ]]; then
+        if ! podman image exists "$BASE_IMAGE_TAG"; then
+          echo "error: repo base image '$BASE_IMAGE_TAG' from $WORKSPACE_ROOT/.aisb.env was not found" >&2
+          echo "Build or pull that image first, then retry." >&2
+          return 1
+        fi
+        echo "Using repo-provided base image: $BASE_IMAGE_TAG"
+        return 0
+      fi
       ;;
     claude)
-      tag="claude-uv:latest"
+      if [[ "$REPO_SCOPED_TOOL_IMAGES" == "1" ]]; then
+        tag="$(aisb_derived_tool_image claude "$WORKSPACE_HASH")"
+      else
+        tag="aisb-claude:latest"
+      fi
       flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
+      ensure_base_image
       local claude_version
       claude_version="$(resolve_npm_version @anthropic-ai/claude-code)"
       echo "Latest Claude Code version: $claude_version"
       flags+=(--build-arg "CLAUDE_VERSION=$claude_version")
       ;;
     codex)
-      tag="codex-uv:latest"
+      if [[ "$REPO_SCOPED_TOOL_IMAGES" == "1" ]]; then
+        tag="$(aisb_derived_tool_image codex "$WORKSPACE_HASH")"
+      else
+        tag="aisb-codex:latest"
+      fi
       flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
+      ensure_base_image
       local codex_version
       codex_version="$(resolve_npm_version @openai/codex)"
       echo "Latest Codex version: $codex_version"
       flags+=(--build-arg "CODEX_VERSION=$codex_version")
       ;;
     pi)
-      tag="pi-uv:latest"
+      if [[ "$REPO_SCOPED_TOOL_IMAGES" == "1" ]]; then
+        tag="$(aisb_derived_tool_image pi "$WORKSPACE_HASH")"
+      else
+        tag="aisb-pi:latest"
+      fi
       flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
+      ensure_base_image
       local pi_version
       pi_version="$(resolve_npm_version @mariozechner/pi-coding-agent)"
       echo "Latest pi-coding-agent version: $pi_version"
@@ -85,14 +152,6 @@ build_one() {
       return 2
       ;;
   esac
-
-  # Flavors depend on the base. For single-flavor invocations, build base on
-  # demand. The `all` branch below builds the base up front before spawning
-  # parallel flavor builds, so this branch is skipped there.
-  if [[ "$flavor" != "base" ]] && ! podman image exists "$BASE_IMAGE_TAG"; then
-    echo "Base image '$BASE_IMAGE_TAG' not found; building it first."
-    build_one base
-  fi
 
   echo "Building $tag from $containerfile"
   podman build \

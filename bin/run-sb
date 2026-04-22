@@ -17,6 +17,17 @@ set -euo pipefail
 #   AISB_CPUS         cpu cap passed to --cpus (default: 4)
 #   AISB_PIDS         pid cap passed to --pids-limit (default: 1024)
 
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_SOURCE" ]]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+  SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+  [[ "$SCRIPT_SOURCE" == /* ]] || SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+
+# shellcheck source=bin/_repo-config.sh
+source "$SCRIPT_DIR/_repo-config.sh"
+
 die_dangerous_root() {
   local root="$1"
   echo "Error: refusing to run sb with dangerous workspace root: $root" >&2
@@ -67,13 +78,23 @@ fi
 ROOT="$(realpath "$ROOT")"
 check_workspace_root "$ROOT"
 
-BASE="$(basename "$ROOT")"
-BASE="${BASE//[^A-Za-z0-9._-]/_}"
-BASE="${BASE:0:48}"
-BASE="${BASE:-repo}"
-HASH="$(printf '%s' "$ROOT" | { sha1sum 2>/dev/null || shasum -a 1; } | awk '{print $1}' | cut -c1-10)"
+BASE="$(aisb_workspace_base "$ROOT")"
+HASH="$(aisb_sha1_10 "$ROOT")"
+aisb_load_repo_env "$ROOT"
+IMAGE="$(aisb_resolve_tool_image sb "$HASH")"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 NAME="sb-${BASE}-${HASH}-${STAMP}-$$"
+
+if ! podman image exists "$IMAGE" 2>/dev/null; then
+  echo "Error: Image '$IMAGE' not found." >&2
+  if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && -z "${SB_IMAGE:-}" ]]; then
+    echo "Build or pull the repo-provided base image, then retry." >&2
+  else
+    echo "Build it first with:" >&2
+    echo "  $(aisb_build_command_hint "$SCRIPT_DIR" "$ROOT" base)" >&2
+  fi
+  exit 1
+fi
 
 CACHE_BASE="${XDG_CACHE_HOME:-$HOME/.cache}/claude-podman"
 STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/claude-podman"
@@ -154,7 +175,6 @@ fi
 # Optional: extra seccomp denies on top of podman's default profile
 SECCOMP_OPTS=()
 if [[ "${AISB_STRICT_SECCOMP:-0}" == "1" ]]; then
-  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
   REPO_ROOT="$(dirname "$SCRIPT_DIR")"
   SECCOMP_PROFILE="${AISB_SECCOMP_PROFILE:-$REPO_ROOT/seccomp-strict.json}"
   if [[ -r "$SECCOMP_PROFILE" ]]; then
@@ -199,5 +219,5 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   -v "$UV_PYTHON_DIR":/uv-python:rw,nosuid,nodev,z \
   -v "$VENV_DIR":/venv:rw,nosuid,nodev,Z \
   -w "$ROOT" \
-  "${SB_IMAGE:-localhost/aisb-base:latest}" \
+  "$IMAGE" \
   "$@"

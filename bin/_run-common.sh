@@ -5,7 +5,6 @@
 #   TOOL       — "claude" | "codex" | "pi" (used in paths + labels)
 #   USER_NAME  — container user login name (e.g. "sb", "codex")
 #   USER_HOME  — absolute home path inside the container
-#   IMAGE      — container image reference
 #
 # Optional caller input:
 #   USER_GECOS — GECOS (display name) field in passwd-entry. Defaults to USER_NAME.
@@ -24,11 +23,14 @@ if [[ "${_RUN_COMMON_LOADED:-0}" == "1" ]]; then
 fi
 _RUN_COMMON_LOADED=1
 
+_AISB_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/_repo-config.sh
+source "$_AISB_COMMON_DIR/_repo-config.sh"
+
 common_init() {
   : "${TOOL:?TOOL must be set before common_init}"
   : "${USER_NAME:?USER_NAME must be set before common_init}"
   : "${USER_HOME:?USER_HOME must be set before common_init}"
-  : "${IMAGE:?IMAGE must be set before common_init}"
   : "${USER_GECOS:=$USER_NAME}"
 
   if git rev-parse --show-toplevel >/dev/null 2>&1; then
@@ -46,11 +48,10 @@ common_init() {
   ROOT="$(realpath "$ROOT")"
   common_check_workspace_root "$ROOT"
 
-  BASE="$(basename "$ROOT")"
-  BASE="${BASE//[^A-Za-z0-9._-]/_}"
-  BASE="${BASE:0:48}"
-  BASE="${BASE:-repo}"
-  HASH="$(printf '%s' "$ROOT" | { sha1sum 2>/dev/null || shasum -a 1; } | awk '{print $1}' | cut -c1-10)"
+  BASE="$(aisb_workspace_base "$ROOT")"
+  HASH="$(aisb_sha1_10 "$ROOT")"
+  aisb_load_repo_env "$ROOT"
+  IMAGE="$(aisb_resolve_tool_image "$TOOL" "$HASH")"
 
   STAMP="$(date +%Y%m%d-%H%M%S)"
   NAME="${TOOL}-${BASE}-${HASH}-${STAMP}-$$"
@@ -218,7 +219,7 @@ _common_warn_memory() {
 common_check_image() {
   if ! podman image exists "$IMAGE" 2>/dev/null; then
     echo "Error: Image '$IMAGE' not found. Build it first with:" >&2
-    echo "  bin/build-containers ${TOOL}" >&2
+    echo "  $(aisb_build_command_hint "$_AISB_COMMON_DIR" "$ROOT" "$TOOL")" >&2
     exit 1
   fi
 }

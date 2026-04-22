@@ -159,6 +159,38 @@ Per-wrapper overrides:
 | `AISB_STRICT_SECCOMP=1`    | Apply `seccomp-strict.json` (extra denies on top of podman default).  |
 | `AISB_SECCOMP_PROFILE`     | Path to custom seccomp profile (overrides `seccomp-strict.json`).     |
 
+### Repo-specific base images
+
+A project can opt into its own sandbox base image by adding `.aisb.env` at the
+repo root:
+
+```sh
+AISB_BASE_IMAGE=localhost/my-project-aisb-base:latest
+```
+
+The file is parsed as data, not sourced as shell. Blank lines and comments are
+allowed; currently only `AISB_BASE_IMAGE` is recognized.
+
+When `AISB_BASE_IMAGE` is present:
+
+- `sb` runs that image directly unless `SB_IMAGE` is set.
+- `claude`, `codex`, and `pi` use repo-scoped derived images built from that
+  base, such as `localhost/aisb-codex-<repo-hash>:latest`, unless their
+  per-wrapper image override is set.
+- `bin/build-containers` uses the repo base as the `BASE_IMAGE` build arg and
+  tags derived tool images with the same repo-scoped names the wrappers expect.
+
+Build repo-specific tool images from inside the project repo, or point the build
+script at the project explicitly:
+
+```sh
+AISB_WORKSPACE=/path/to/project /path/to/aisb/bin/build-containers all
+```
+
+Explicit environment overrides keep precedence: `SB_IMAGE`, `CLAUDE_IMAGE`,
+`CODEX_IMAGE`, and `PI_IMAGE` override wrapper selection; `BASE_IMAGE` overrides
+the base image used by `bin/build-containers`.
+
 [podman]: https://podman.io
 [direnv]: https://direnv.net
 [pass]: https://www.passwordstore.org
