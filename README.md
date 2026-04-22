@@ -56,9 +56,10 @@ The wrappers:
   `TOGETHER_API_KEY`, …) and `gh` auth
 - mount Claude's host auth files (`~/.claude/.credentials.json`,
   `~/.claude.json`) read-write for Claude Code compatibility, while keeping the
-  rest of Claude runtime state per-repo. Codex auth/config and `gh` config are
-  mounted **read-only** in normal runs. To refresh tokens or run a first-time
-  `login`, use `AISB_AUTH_WRITE=1` (or wrapper-specific `CODEX_AUTH_WRITE=1`).
+  rest of Claude runtime state per-repo. Codex auth/config are staged into
+  wrapper-owned state and mounted **read-only** in normal runs; `gh` config is
+  also mounted **read-only**. To refresh tokens or run a first-time `login`, use
+  `AISB_AUTH_WRITE=1` (or wrapper-specific `CODEX_AUTH_WRITE=1`).
   Auth-write mode also mounts the repo read-only to shrink blast radius — set
   `AISB_AUTH_WRITE_KEEP_REPO_RW=1` to override.
 - keep durable per-repo runtime state (Claude/Codex dotdirs, logs, sessions,
@@ -67,7 +68,7 @@ The wrappers:
   rebuilds
 - run tools with container-local homes (`/home/sb` for Claude, `/home/codex`
   for Codex). Host files still come from your own `$HOME`; startup logs show
-  the host path and the container destination for each auth/config mount.
+  how each auth/config file reaches the container.
 - mount a per-invocation `/tmp` from `$XDG_STATE_HOME/claude-podman/` so
   scratch data stays outside the repo without being capped by a small tmpfs.
   Old tmp dirs are pruned on later wrapper starts.
