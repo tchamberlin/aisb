@@ -15,7 +15,8 @@
 #   WORKSPACE_CACHE_DIR, WORKSPACE_STATE_DIR, WORKSPACE_UV_CACHE_DIR,
 #   WORKSPACE_UV_PYTHON_DIR, WORKSPACE_VENV_DIR, WORKSPACE_PYTEST_CACHE_DIR
 #   AUTH_MODE, REPO_MODE
-#   COMMON_PODMAN_ARGS (array of flags shared across wrappers)
+#   COMMON_PODMAN_ARGS (all shared podman flags: base hardening, tty, gh
+#                       auth passthrough, optional strict seccomp)
 
 if [[ "${_RUN_COMMON_LOADED:-0}" == "1" ]]; then
   return 0
@@ -133,6 +134,10 @@ common_init() {
     -v "${WORKSPACE_PYTEST_CACHE_DIR}:/aisb-${TOOL}/pytest:rw,nosuid,nodev,z"
     -w "$ROOT"
   )
+
+  _common_append_tty
+  _common_append_gh
+  _common_append_seccomp
 }
 
 _common_warn_memory() {
@@ -161,36 +166,33 @@ common_check_image() {
   fi
 }
 
-common_build_gh_opts() {
-  local -n _arr="$1"
+_common_append_gh() {
   if [[ -n "${GH_TOKEN:-}" ]]; then
-    _arr+=(-e "GH_TOKEN=$GH_TOKEN")
+    COMMON_PODMAN_ARGS+=(-e "GH_TOKEN=$GH_TOKEN")
   elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    _arr+=(-e "GITHUB_TOKEN=$GITHUB_TOKEN")
+    COMMON_PODMAN_ARGS+=(-e "GITHUB_TOKEN=$GITHUB_TOKEN")
   fi
   local gh_host_config="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
   if [[ -d "$gh_host_config" ]]; then
-    _arr+=(-v "${gh_host_config}:${USER_HOME}/.config/gh:${AUTH_MODE},nosuid,nodev,noexec,z")
+    COMMON_PODMAN_ARGS+=(-v "${gh_host_config}:${USER_HOME}/.config/gh:${AUTH_MODE},nosuid,nodev,noexec,z")
   fi
 }
 
-common_build_tty_flags() {
-  local -n _arr="$1"
-  _arr+=(-i)
+_common_append_tty() {
+  COMMON_PODMAN_ARGS+=(-i)
   if [[ -t 0 && -t 1 ]]; then
-    _arr+=(-t)
+    COMMON_PODMAN_ARGS+=(-t)
   fi
 }
 
-common_build_seccomp_opts() {
-  local -n _arr="$1"
+_common_append_seccomp() {
   [[ "${AISB_STRICT_SECCOMP:-0}" == "1" ]] || return 0
   local lib_dir repo_root seccomp_profile
   lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   repo_root="$(dirname "$lib_dir")"
   seccomp_profile="${AISB_SECCOMP_PROFILE:-$repo_root/seccomp-strict.json}"
   if [[ -r "$seccomp_profile" ]]; then
-    _arr+=(--security-opt "seccomp=$seccomp_profile")
+    COMMON_PODMAN_ARGS+=(--security-opt "seccomp=$seccomp_profile")
   else
     echo "warn: AISB_STRICT_SECCOMP=1 but $seccomp_profile is not readable; using default" >&2
   fi

@@ -48,10 +48,5 @@ if [[ "${CLAUDE_SAFE_MODE:-0}" != "1" ]]; then
   CLAUDE_FLAGS+=(--dangerously-skip-permissions)
 fi
 
-GH_OPTS=(); common_build_gh_opts GH_OPTS
-TTY_FLAGS=(); common_build_tty_flags TTY_FLAGS
-SECCOMP_OPTS=(); common_build_seccomp_opts SECCOMP_OPTS
-
-exec podman run "${TTY_FLAGS[@]}" "${COMMON_PODMAN_ARGS[@]}" \
-  "${SECCOMP_OPTS[@]}" "${GH_OPTS[@]}" "${TOOL_MOUNTS[@]}" \
+exec podman run "${COMMON_PODMAN_ARGS[@]}" "${TOOL_MOUNTS[@]}" \
   "$IMAGE" "${CLAUDE_FLAGS[@]}" "$@"

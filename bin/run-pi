@@ -38,10 +38,6 @@ for var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY TO
   fi
 done
 
-GH_OPTS=(); common_build_gh_opts GH_OPTS
-TTY_FLAGS=(); common_build_tty_flags TTY_FLAGS
-SECCOMP_OPTS=(); common_build_seccomp_opts SECCOMP_OPTS
-
-exec podman run "${TTY_FLAGS[@]}" "${COMMON_PODMAN_ARGS[@]}" \
-  "${SECCOMP_OPTS[@]}" "${PI_OPTS[@]}" "${GH_OPTS[@]}" "${TOOL_MOUNTS[@]}" \
+exec podman run "${COMMON_PODMAN_ARGS[@]}" \
+  "${PI_OPTS[@]}" "${TOOL_MOUNTS[@]}" \
   "$IMAGE" "$@"
