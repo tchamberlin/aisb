@@ -7,7 +7,7 @@ FROM registry.fedoraproject.org/fedora-minimal@sha256:af9f254d2644fc392ed1948d7d
 RUN microdnf install -y --setopt=install_weak_deps=0 \
       ca-certificates curl git openssh-clients bash which \
       ripgrep fd-find fzf tree less jq \
-      gawk sed patch diffutils findutils \
+      gawk sed patch diffutils findutils ShellCheck \
       unzip zip tar xz bzip2 gzip \
       pdfgrep poppler-utils \
       procps-ng psmisc lsof strace \
