@@ -11,9 +11,22 @@ RUN echo "claude-code cache key: ${CLAUDE_VERSION}" \
  && bash -lc 'set -euo pipefail; \
       export HOME=/opt/claude-staging; \
       export PATH="$HOME/.local/bin:$PATH"; \
-      mkdir -p "$HOME"; \
+      mkdir -p "$HOME" /opt/claude/bin; \
       curl -fsSL https://claude.ai/install.sh | bash; \
-      install -m 0755 "$(readlink -f "$HOME/.local/bin/claude")" /usr/local/bin/claude; \
+      install -m 0755 "$(readlink -f "$HOME/.local/bin/claude")" /opt/claude/bin/claude; \
       rm -rf /opt/claude-staging'
 
-ENTRYPOINT ["claude"]
+# Claude's installer records installMethod=native and expects the binary at
+# $HOME/.local/bin/claude. Home is a per-run tmpfs, so materialize that
+# symlink on each start. Keep the real binary outside /usr/local/bin so
+# `claude doctor` doesn't flag it as a competing npm-global install.
+RUN printf '%s\n' \
+      '#!/bin/sh' \
+      'set -e' \
+      'mkdir -p "$HOME/.local/bin"' \
+      'ln -sfn /opt/claude/bin/claude "$HOME/.local/bin/claude"' \
+      'exec /opt/claude/bin/claude "$@"' \
+    > /opt/claude/bin/claude-entrypoint \
+ && chmod 0755 /opt/claude/bin/claude-entrypoint
+
+ENTRYPOINT ["/opt/claude/bin/claude-entrypoint"]
