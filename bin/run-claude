@@ -45,8 +45,8 @@ fi
 TOOL_MOUNTS=(
   -v "${CLAUDE_DIR}:${USER_HOME}/.claude:rw,nosuid,nodev,noexec,z"
   -v "${CLAUDE_DIR}/claude.json:${USER_HOME}/.claude.json:rw,nosuid,nodev,noexec,z"
-  -v "${HOME}/.claude/settings.json:${USER_HOME}/.claude/settings.json:ro,nosuid,nodev,noexec,z"
-  -v "${HOME}/.claude/.credentials.json:${USER_HOME}/.claude/.credentials.json:rw,nosuid,nodev,noexec,z"
+  -v "${HOME}/.claude/settings.json:${USER_HOME}/.claude/settings.json:ro,nosuid,nodev,noexec"
+  -v "${HOME}/.claude/.credentials.json:${USER_HOME}/.claude/.credentials.json:rw,nosuid,nodev,noexec"
 )
 
 CLAUDE_FLAGS=()

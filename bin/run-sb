@@ -153,9 +153,12 @@ TMP_DIR="${STATE_BASE}/sb/${HASH}/tmp/${STAMP}-$$"
 mkdir -p "$UV_CACHE" "$UV_PYTHON_DIR" "$VENV_DIR" "$TMP_DIR"
 chmod 1777 "$TMP_DIR"
 
-# Prune per-invocation dirs.
-find "${STATE_BASE}/venvs/${HASH}" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
-find "${STATE_BASE}/sb/${HASH}/tmp" -mindepth 1 -maxdepth 1 -type d -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
+# Prune per-invocation dirs. Guard against empty path components so a future
+# refactor can't let `find` descend into / or $HOME.
+if [[ -n "$STATE_BASE" && -n "$HASH" ]]; then
+  find "${STATE_BASE}/venvs/${HASH}" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+  find "${STATE_BASE}/sb/${HASH}/tmp" -mindepth 1 -maxdepth 1 -type d -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
+fi
 
 # Forward common API keys + editor prefs
 ENV_OPTS=()
@@ -178,7 +181,7 @@ elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
 fi
 GH_HOST_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
 if [[ -d "$GH_HOST_CONFIG" ]]; then
-  GH_OPTS+=(-v "${GH_HOST_CONFIG}:/home/sb/.config/gh:ro,nosuid,nodev,noexec,z")
+  GH_OPTS+=(-v "${GH_HOST_CONFIG}:/home/sb/.config/gh:ro,nosuid,nodev,noexec")
 fi
 
 # Interactive only if stdin is a tty

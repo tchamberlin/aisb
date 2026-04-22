@@ -119,9 +119,12 @@ common_init() {
   chmod 1777 "$WORKSPACE_TMP_DIR"
 
   # Prune per-invocation dirs, scoped per tool so tools don't blow away each
-  # other's caches.
-  find "${STATE_BASE}/${TOOL}/${HASH}/venvs" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
-  find "${STATE_BASE}/${TOOL}/${HASH}/tmp" -mindepth 1 -maxdepth 1 -type d -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
+  # other's caches. Guard against empty path components so a future refactor
+  # can't let `find` descend into / or $HOME.
+  if [[ -n "$STATE_BASE" && -n "$TOOL" && -n "$HASH" ]]; then
+    find "${STATE_BASE}/${TOOL}/${HASH}/venvs" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+    find "${STATE_BASE}/${TOOL}/${HASH}/tmp" -mindepth 1 -maxdepth 1 -type d -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
+  fi
 
   local tool_upper tool_auth_var
   tool_upper="${TOOL^^}"
@@ -280,7 +283,7 @@ _common_append_gh() {
   fi
   local gh_host_config="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
   if [[ -d "$gh_host_config" ]]; then
-    COMMON_PODMAN_ARGS+=(-v "${gh_host_config}:${USER_HOME}/.config/gh:${AUTH_MODE},nosuid,nodev,noexec,z")
+    COMMON_PODMAN_ARGS+=(-v "${gh_host_config}:${USER_HOME}/.config/gh:${AUTH_MODE},nosuid,nodev,noexec")
   fi
 }
 

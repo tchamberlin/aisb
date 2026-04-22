@@ -32,7 +32,11 @@ TOOL_MOUNTS=(
 # without mutating shared pi state.
 PROJECT_MODELS="$ROOT/.pi/agent/models.json"
 if [[ -f "$PROJECT_MODELS" ]]; then
-  TOOL_MOUNTS+=(-v "${PROJECT_MODELS}:${USER_HOME}/.pi/agent/models.json:ro,nosuid,nodev,noexec,z")
+  PROJECT_MODELS_OPTS="ro,nosuid,nodev,noexec"
+  if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
+    PROJECT_MODELS_OPTS+=",z"
+  fi
+  TOOL_MOUNTS+=(-v "${PROJECT_MODELS}:${USER_HOME}/.pi/agent/models.json:${PROJECT_MODELS_OPTS}")
 fi
 
 # Forward API keys and editor preferences that pi reads

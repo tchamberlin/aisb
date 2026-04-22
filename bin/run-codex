@@ -28,8 +28,8 @@ mkdir -p "$CODEX_DIR"
 
 TOOL_MOUNTS=(
   -v "${CODEX_DIR}:${USER_HOME}/.codex:rw,nosuid,nodev,noexec,z"
-  -v "${HOME}/.codex/auth.json:${USER_HOME}/.codex/auth.json:${AUTH_MODE},nosuid,nodev,noexec,z"
-  -v "${HOME}/.codex/config.toml:${USER_HOME}/.codex/config.toml:${AUTH_MODE},nosuid,nodev,noexec,z"
+  -v "${HOME}/.codex/auth.json:${USER_HOME}/.codex/auth.json:${AUTH_MODE},nosuid,nodev,noexec"
+  -v "${HOME}/.codex/config.toml:${USER_HOME}/.codex/config.toml:${AUTH_MODE},nosuid,nodev,noexec"
 )
 
 # Container IS the sandbox, so bypass codex's internal one unless opted out.
