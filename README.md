@@ -201,6 +201,12 @@ Per-wrapper overrides:
 | `AISB_STRICT_SECCOMP=1`    | Apply `seccomp-strict.json` (extra denies on top of podman default).  |
 | `AISB_SECCOMP_PROFILE`     | Path to custom seccomp profile (overrides `seccomp-strict.json`).     |
 
+For a first-time Codex OAuth login, run:
+
+```sh
+CODEX_AUTH_WRITE=1 codex login
+```
+
 ### Repo-specific base images
 
 A project can opt into its own sandbox base image by adding a `Containerfile`
