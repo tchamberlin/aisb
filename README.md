@@ -1,5 +1,7 @@
 # aisb
 
+**This repository is in an alpha state. I make no guarantees as to its correctness or utility. I will make breaking changes without notice**
+
 **A**I **s**and**b**ox — run coding agents (Claude Code, Codex, pi, or a plain
 shell) inside a hardened rootless [podman] container. Each invocation gets a
 fresh container; only the current repo and per-agent auth are mounted.
