@@ -54,13 +54,13 @@ The wrappers:
   where the agent should not mutate the repo.
 - forward API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `TOGETHER_API_KEY`, …) and `gh` auth
-- mount Claude's host auth files (`~/.claude/.credentials.json`,
-  `~/.claude.json`) read-write for Claude Code compatibility, while keeping the
-  rest of Claude runtime state per-repo. Codex auth/config and `gh` config are
-  mounted **read-only** in normal runs. On SELinux hosts, wrappers ask before
-  relabeling the specific auth/config files needed for container access. To
-  refresh tokens or run a first-time `login`, use `AISB_AUTH_WRITE=1` (or
-  wrapper-specific `CODEX_AUTH_WRITE=1`).
+- mount Claude's host auth/settings files (`~/.claude/.credentials.json`,
+  `~/.claude/settings.json`, `~/.claude.json`) read-write for Claude Code
+  compatibility, while keeping the rest of Claude runtime state per-repo. Codex
+  auth/config and `gh` config are mounted **read-only** in normal runs. On
+  SELinux hosts, wrappers ask before relabeling the specific auth/config files
+  needed for container access. To refresh tokens or run a first-time `login`,
+  use `AISB_AUTH_WRITE=1` (or wrapper-specific `CODEX_AUTH_WRITE=1`).
   Auth-write mode also mounts the repo read-only to shrink blast radius — set
   `AISB_AUTH_WRITE_KEEP_REPO_RW=1` to override.
 - keep durable per-repo runtime state (Claude/Codex dotdirs, logs, sessions,
@@ -159,10 +159,11 @@ the sandbox with sensitive material:
   boundaries to model alignment. If the model is jailbroken or
   prompt-injected, no in-container check will stop it.
 
-Claude auth files are writable in normal runs because Claude Code may rewrite
-them during startup. Codex credentials and `gh` config remain read-only in
-normal runs (see `AISB_AUTH_WRITE=1` below for refresh mode). This does not
-prevent exfiltration of credentials that the current session can read.
+Claude auth/settings files are writable in normal runs because Claude Code may
+rewrite them during startup and persist acknowledgements there. Codex
+credentials and `gh` config remain read-only in normal runs (see
+`AISB_AUTH_WRITE=1` below for refresh mode). This does not prevent exfiltration
+of credentials that the current session can read.
 
 ## Environment
 
