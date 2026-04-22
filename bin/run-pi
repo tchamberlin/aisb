@@ -1,95 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Repo root (or current dir)
-if git rev-parse --show-toplevel >/dev/null 2>&1; then
-  ROOT="$(git rev-parse --show-toplevel)"
-else
-  ROOT="$PWD"
-fi
-ROOT="$(realpath "$ROOT")"
+TOOL="pi"
+USER_NAME="sb"
+USER_HOME="/home/sb"
+IMAGE="${PI_IMAGE:-pi-uv:latest}"
 
-BASE="$(basename "$ROOT")"
-BASE="${BASE//[^A-Za-z0-9._-]/_}"
-BASE="${BASE:0:48}"
-BASE="${BASE:-repo}"
-HASH="$(printf '%s' "$ROOT" | { sha1sum 2>/dev/null || shasum -a 1; } | awk '{print $1}' | cut -c1-10)"
+# shellcheck source=bin/_run-common.sh
+source "$SCRIPT_DIR/_run-common.sh"
+common_init
+common_check_image
 
-# Unique per invocation so multiple can run simultaneously
-STAMP="$(date +%Y%m%d-%H%M%S)"
-NAME="pi-${BASE}-${HASH}-${STAMP}-$$"
-
-# Ensure host-side config dir exists
+# Pi has no persistent host auth file — API keys are forwarded via env.
+# State (sessions, logs) lives per-repo under STATE_BASE.
 mkdir -p "$HOME/.pi/agent"
 
-# Per-repo state dirs
-CACHE_BASE="${XDG_CACHE_HOME:-$HOME/.cache}/claude-podman"
-STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/claude-podman"
+PI_DIR="${STATE_BASE}/pi/${HASH}/dot-pi-agent"
+mkdir -p "$PI_DIR"
 
-PI_DIR="${STATE_BASE}/pi/${HASH}"
-UV_CACHE="${CACHE_BASE}/uv/${HASH}"
-VENV_DIR="${STATE_BASE}/venvs/${HASH}/${STAMP}-$$"
+TOOL_MOUNTS=(
+  -v "${PI_DIR}:${USER_HOME}/.pi/agent:rw,nosuid,nodev,noexec,z"
+)
+
+# Repo-local models.json override — lets a repo pin custom model definitions
+# without mutating shared pi state.
 PROJECT_MODELS="$ROOT/.pi/agent/models.json"
-
-mkdir -p "$PI_DIR" "$UV_CACHE" "$VENV_DIR"
-
-# Allow repo-local custom model definitions to override the container's models.json
-# while keeping auth, sessions, and other mutable pi state in the host state dir.
-MODEL_OPTS=()
 if [[ -f "$PROJECT_MODELS" ]]; then
-  MODEL_OPTS+=(-v "$PROJECT_MODELS":/home/sb/.pi/agent/models.json:ro,nosuid,nodev,noexec,z)
-fi
-
-# Prune venv dirs older than 7 days
-find "${STATE_BASE}/venvs/${HASH}" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
-
-# Pi has no persistent host auth file; API keys are forwarded via env.
-# AISB_AUTH_WRITE is accepted for wrapper parity and switches the repo mount
-# to read-only, mirroring the other wrappers' auth-refresh posture.
-if [[ "${AISB_AUTH_WRITE:-0}" == "1" || "${PI_AUTH_WRITE:-0}" == "1" ]]; then
-  AUTH_MODE="rw"
-  REPO_MODE="rw"
-  if [[ "${AISB_AUTH_WRITE_KEEP_REPO_RW:-0}" != "1" ]]; then
-    REPO_MODE="ro"
-  fi
-  echo "pi: auth-write mode (repo=$REPO_MODE)" >&2
-else
-  AUTH_MODE="ro"
-  REPO_MODE="rw"
-fi
-
-# Resource caps (overridable via env)
-: "${AISB_MEMORY:=8g}"
-: "${AISB_CPUS:=4}"
-: "${AISB_PIDS:=1024}"
-
-# Warn if the host has less available memory than AISB_MEMORY; podman will
-# honor the cap but the kernel may reap the container under real pressure.
-if [[ -r /proc/meminfo ]] && [[ "$AISB_MEMORY" =~ ^([0-9]+)([bBkKmMgG]?)$ ]]; then
-  _n="${BASH_REMATCH[1]}"
-  case "${BASH_REMATCH[2],,}" in
-    ""|b) _req_mem="$_n" ;;
-    k)    _req_mem=$((_n * 1024)) ;;
-    m)    _req_mem=$((_n * 1024 * 1024)) ;;
-    g)    _req_mem=$((_n * 1024 * 1024 * 1024)) ;;
-  esac
-  _avail_mem="$(awk '/^MemAvailable:/{print $2*1024; exit}' /proc/meminfo)"
-  if [[ -n "${_req_mem:-}" && -n "$_avail_mem" ]] && (( _req_mem > _avail_mem )); then
-    echo "warn: AISB_MEMORY=$AISB_MEMORY exceeds host MemAvailable (~$((_avail_mem/1024/1024)) MiB); container may OOM" >&2
-  fi
-fi
-
-# Optional: extra seccomp denies on top of podman's default profile
-SECCOMP_OPTS=()
-if [[ "${AISB_STRICT_SECCOMP:-0}" == "1" ]]; then
-  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-  REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-  SECCOMP_PROFILE="${AISB_SECCOMP_PROFILE:-$REPO_ROOT/seccomp-strict.json}"
-  if [[ -r "$SECCOMP_PROFILE" ]]; then
-    SECCOMP_OPTS+=(--security-opt "seccomp=$SECCOMP_PROFILE")
-  else
-    echo "warn: AISB_STRICT_SECCOMP=1 but $SECCOMP_PROFILE is not readable; using default" >&2
-  fi
+  TOOL_MOUNTS+=(-v "${PROJECT_MODELS}:${USER_HOME}/.pi/agent/models.json:ro,nosuid,nodev,noexec,z")
 fi
 
 # Forward API keys and editor preferences that pi reads
@@ -100,48 +38,10 @@ for var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY TO
   fi
 done
 
-# GitHub CLI: forward token env var and/or host config
-GH_OPTS=()
-if [[ -n "${GH_TOKEN:-}" ]]; then
-  GH_OPTS+=(-e "GH_TOKEN=$GH_TOKEN")
-elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
-  GH_OPTS+=(-e "GITHUB_TOKEN=$GITHUB_TOKEN")
-fi
-GH_HOST_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
-if [[ -d "$GH_HOST_CONFIG" ]]; then
-  GH_OPTS+=(-v "$GH_HOST_CONFIG":/home/sb/.config/gh:${AUTH_MODE},nosuid,nodev,noexec,z)
-fi
+GH_OPTS=(); common_build_gh_opts GH_OPTS
+TTY_FLAGS=(); common_build_tty_flags TTY_FLAGS
+SECCOMP_OPTS=(); common_build_seccomp_opts SECCOMP_OPTS
 
-exec podman run --rm -it --pull=never \
-  --name "$NAME" \
-  --userns=keep-id \
-  --passwd-entry "sb:x:\$UID:\$GID:sb:/home/sb:/bin/bash" \
-  --cap-drop=all \
-  --security-opt no-new-privileges \
-  --read-only \
-  --memory="$AISB_MEMORY" \
-  --cpus="$AISB_CPUS" \
-  --pids-limit="$AISB_PIDS" \
-  "${SECCOMP_OPTS[@]}" \
-  --tmpfs /tmp:rw,nosuid,nodev,size=512m \
-  --tmpfs /home/sb:rw,nosuid,nodev,size=256m \
-  --tmpfs /uv-bin:rw,nosuid,nodev,size=128m \
-  --tmpfs /uv-tools:rw,nosuid,nodev,size=256m \
-  --label "io.pi.repo=$ROOT" \
-  --label "io.pi.repo_hash=$HASH" \
-  --label "io.pi.session=$STAMP-$$" \
-  -e HOME=/home/sb \
-  -e TERM="${TERM:-xterm-256color}" \
-  -e COLORTERM="${COLORTERM:-truecolor}" \
-  -e UV_CACHE_DIR=/uv-cache \
-  -e UV_PROJECT_ENVIRONMENT=/venv \
-  "${PI_OPTS[@]}" \
-  "${GH_OPTS[@]}" \
-  -v "$ROOT":"$ROOT":${REPO_MODE},nosuid,nodev,z \
-  -v "$PI_DIR":/home/sb/.pi/agent:rw,nosuid,nodev,z \
-  "${MODEL_OPTS[@]}" \
-  -v "$UV_CACHE":/uv-cache:rw,nosuid,nodev,z \
-  -v "$VENV_DIR":/venv:rw,nosuid,nodev,Z \
-  -w "$ROOT" \
-  "${PI_IMAGE:-pi-uv:latest}" \
-  "$@"
+exec podman run "${TTY_FLAGS[@]}" "${COMMON_PODMAN_ARGS[@]}" \
+  "${SECCOMP_OPTS[@]}" "${PI_OPTS[@]}" "${GH_OPTS[@]}" "${TOOL_MOUNTS[@]}" \
+  "$IMAGE" "$@"
