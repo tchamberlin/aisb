@@ -1,175 +1,48 @@
 #!/usr/bin/env bash
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Repo root (or current dir)
-if git rev-parse --show-toplevel >/dev/null 2>&1; then
-  ROOT="$(git rev-parse --show-toplevel)"
-else
-  ROOT="$PWD"
-fi
-ROOT="$(realpath "$ROOT")"
+TOOL="codex"
+USER_NAME="codex"
+USER_GECOS="Codex"
+USER_HOME="/home/codex"
+IMAGE="${CODEX_IMAGE:-codex-uv:latest}"
 
-BASE="$(basename "$ROOT")"
-BASE="${BASE//[^A-Za-z0-9._-]/_}"
-BASE="${BASE:0:48}"
-BASE="${BASE:-repo}"
-HASH="$(printf '%s' "$ROOT" | { sha1sum 2>/dev/null || shasum -a 1; } | awk '{print $1}' | cut -c1-10)"
+# shellcheck source=bin/_run-common.sh
+source "$SCRIPT_DIR/_run-common.sh"
+common_init
+common_check_image
 
-# Unique per invocation so multiple can run simultaneously
-STAMP="$(date +%Y%m%d-%H%M%S)"
-NAME="codex-${BASE}-${HASH}-${STAMP}-$$"
-
-# Ensure host-side auth/config files exist. Only these two files are shared
-# across repos (OAuth token + user config); everything else (sessions, logs,
-# caches) is scoped per-repo under $STATE_BASE/codex/$HASH/.
+# Only auth.json + config.toml are shared across repos (OAuth token + user
+# config). Everything else (sessions, logs, caches) is scoped per-repo.
 mkdir -p "$HOME/.codex"
 touch "$HOME/.codex/auth.json"
 touch "$HOME/.codex/config.toml"
 
-# Durable workspace-scoped state under XDG so the repo stays clean and host
-# ~/.codex is not globally writable from normal runs.
-CACHE_BASE="${XDG_CACHE_HOME:-$HOME/.cache}/claude-podman"
-STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/claude-podman"
-
 CODEX_DIR="${STATE_BASE}/codex/${HASH}/dot-codex"
-WORKSPACE_CACHE_DIR="${STATE_BASE}/codex/${HASH}/cache"
-WORKSPACE_STATE_DIR="${STATE_BASE}/codex/${HASH}/state"
-WORKSPACE_UV_CACHE_DIR="${CACHE_BASE}/uv/${HASH}"
-WORKSPACE_UV_PYTHON_DIR="${STATE_BASE}/codex/${HASH}/uv-python"
-WORKSPACE_VENV_DIR="${STATE_BASE}/codex/${HASH}/venvs/${STAMP}-$$"
-WORKSPACE_PYTEST_CACHE_DIR="${STATE_BASE}/codex/${HASH}/pytest"
+mkdir -p "$CODEX_DIR"
 
-mkdir -p \
-  "$CODEX_DIR" \
-  "$WORKSPACE_CACHE_DIR" \
-  "$WORKSPACE_STATE_DIR" \
-  "$WORKSPACE_UV_CACHE_DIR" \
-  "$WORKSPACE_UV_PYTHON_DIR" \
-  "$WORKSPACE_VENV_DIR" \
-  "$WORKSPACE_PYTEST_CACHE_DIR"
+TOOL_MOUNTS=(
+  -v "${CODEX_DIR}:${USER_HOME}/.codex:rw,nosuid,nodev,noexec,z"
+  -v "${HOME}/.codex/auth.json:${USER_HOME}/.codex/auth.json:${AUTH_MODE},nosuid,nodev,noexec,z"
+  -v "${HOME}/.codex/config.toml:${USER_HOME}/.codex/config.toml:${AUTH_MODE},nosuid,nodev,noexec,z"
+)
 
-# Prune per-invocation venv dirs older than 7 days
-find "${STATE_BASE}/codex/${HASH}/venvs" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
-
-# Build flags — container IS the sandbox, so bypass codex's internal one
+# Container IS the sandbox, so bypass codex's internal one unless opted out.
 CODEX_FLAGS=()
 if [[ "${CODEX_SAFE_MODE:-0}" != "1" ]]; then
   CODEX_FLAGS+=(--dangerously-bypass-approvals-and-sandbox)
 fi
 
-# Auth-write mode: for `codex login` or token refresh. Flips auth files to
-# writable; makes the repo read-only to shrink blast radius.
-if [[ "${AISB_AUTH_WRITE:-0}" == "1" || "${CODEX_AUTH_WRITE:-0}" == "1" ]]; then
-  AUTH_MODE="rw"
-  REPO_MODE="rw"
-  if [[ "${AISB_AUTH_WRITE_KEEP_REPO_RW:-0}" != "1" ]]; then
-    REPO_MODE="ro"
-  fi
-  echo "codex: auth-write mode (auth=rw, repo=$REPO_MODE)" >&2
-else
-  AUTH_MODE="ro"
-  REPO_MODE="rw"
-fi
-
-# Resource caps (overridable via env)
-: "${AISB_MEMORY:=8g}"
-: "${AISB_CPUS:=4}"
-: "${AISB_PIDS:=1024}"
-
-# Warn if the host has less available memory than AISB_MEMORY; podman will
-# honor the cap but the kernel may reap the container under real pressure.
-if [[ -r /proc/meminfo ]] && [[ "$AISB_MEMORY" =~ ^([0-9]+)([bBkKmMgG]?)$ ]]; then
-  _n="${BASH_REMATCH[1]}"
-  case "${BASH_REMATCH[2],,}" in
-    ""|b) _req_mem="$_n" ;;
-    k)    _req_mem=$((_n * 1024)) ;;
-    m)    _req_mem=$((_n * 1024 * 1024)) ;;
-    g)    _req_mem=$((_n * 1024 * 1024 * 1024)) ;;
-  esac
-  _avail_mem="$(awk '/^MemAvailable:/{print $2*1024; exit}' /proc/meminfo)"
-  if [[ -n "${_req_mem:-}" && -n "$_avail_mem" ]] && (( _req_mem > _avail_mem )); then
-    echo "warn: AISB_MEMORY=$AISB_MEMORY exceeds host MemAvailable (~$((_avail_mem/1024/1024)) MiB); container may OOM" >&2
-  fi
-fi
-
-# Optional: extra seccomp denies on top of podman's default profile
-SECCOMP_OPTS=()
-if [[ "${AISB_STRICT_SECCOMP:-0}" == "1" ]]; then
-  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-  REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-  SECCOMP_PROFILE="${AISB_SECCOMP_PROFILE:-$REPO_ROOT/seccomp-strict.json}"
-  if [[ -r "$SECCOMP_PROFILE" ]]; then
-    SECCOMP_OPTS+=(--security-opt "seccomp=$SECCOMP_PROFILE")
-  else
-    echo "warn: AISB_STRICT_SECCOMP=1 but $SECCOMP_PROFILE is not readable; using default" >&2
-  fi
-fi
-
-# OpenAI auth: forward API key
 OPENAI_OPTS=()
 if [[ -n "${OPENAI_API_KEY:-}" ]]; then
   OPENAI_OPTS+=(-e "OPENAI_API_KEY=$OPENAI_API_KEY")
 fi
 
-# GitHub CLI: forward token env var and/or host config
-GH_OPTS=()
-if [[ -n "${GH_TOKEN:-}" ]]; then
-  GH_OPTS+=(-e "GH_TOKEN=$GH_TOKEN")
-elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
-  GH_OPTS+=(-e "GITHUB_TOKEN=$GITHUB_TOKEN")
-fi
-GH_HOST_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
-if [[ -d "$GH_HOST_CONFIG" ]]; then
-  GH_OPTS+=(-v "$GH_HOST_CONFIG":/home/codex/.config/gh:${AUTH_MODE},nosuid,nodev,noexec,z)
-fi
+GH_OPTS=(); common_build_gh_opts GH_OPTS
+TTY_FLAGS=(); common_build_tty_flags TTY_FLAGS
+SECCOMP_OPTS=(); common_build_seccomp_opts SECCOMP_OPTS
 
-IMAGE="${CODEX_IMAGE:-codex-uv:latest}"
-if ! podman image exists "$IMAGE" 2>/dev/null; then
-  echo "Error: Image '$IMAGE' not found. Build it first with:" >&2
-  echo "  bin/build-containers codex" >&2
-  exit 1
-fi
-
-exec podman run --rm -it --pull=never \
-  --name "$NAME" \
-  --userns=keep-id \
-  --passwd-entry "codex:x:\$UID:\$GID:Codex:/home/codex:/bin/bash" \
-  --cap-drop=all \
-  --security-opt no-new-privileges \
-  --read-only \
-  --memory="$AISB_MEMORY" \
-  --cpus="$AISB_CPUS" \
-  --pids-limit="$AISB_PIDS" \
-  "${SECCOMP_OPTS[@]}" \
-  --tmpfs /tmp:rw,nosuid,nodev,size=512m \
-  --tmpfs /home/codex:rw,nosuid,nodev,size=256m \
-  --tmpfs /uv-bin:rw,nosuid,nodev,size=128m \
-  --tmpfs /uv-tools:rw,nosuid,nodev,size=256m \
-  --label "io.codex.repo=$ROOT" \
-  --label "io.codex.repo_hash=$HASH" \
-  --label "io.codex.session=$STAMP-$$" \
-  -e HOME=/home/codex \
-  -e TERM="${TERM:-xterm-256color}" \
-  -e COLORTERM="${COLORTERM:-truecolor}" \
-  -e XDG_CACHE_HOME=/aisb-codex/cache \
-  -e XDG_STATE_HOME=/aisb-codex/state \
-  -e UV_CACHE_DIR=/aisb-codex/uv-cache \
-  -e UV_PYTHON_INSTALL_DIR=/aisb-codex/uv-python \
-  -e UV_PROJECT_ENVIRONMENT=/aisb-codex/venv \
-  -e PYTEST_ADDOPTS="${PYTEST_ADDOPTS:-} -o cache_dir=/aisb-codex/pytest" \
-  "${OPENAI_OPTS[@]}" \
-  "${GH_OPTS[@]}" \
-  -v "$ROOT":"$ROOT":${REPO_MODE},nosuid,nodev,z \
-  -v "$CODEX_DIR":/home/codex/.codex:rw,nosuid,nodev,noexec,z \
-  -v "$HOME/.codex/auth.json":/home/codex/.codex/auth.json:${AUTH_MODE},nosuid,nodev,noexec,z \
-  -v "$HOME/.codex/config.toml":/home/codex/.codex/config.toml:${AUTH_MODE},nosuid,nodev,noexec,z \
-  -v "$WORKSPACE_CACHE_DIR":/aisb-codex/cache:rw,nosuid,nodev,z \
-  -v "$WORKSPACE_STATE_DIR":/aisb-codex/state:rw,nosuid,nodev,z \
-  -v "$WORKSPACE_UV_CACHE_DIR":/aisb-codex/uv-cache:rw,nosuid,nodev,z \
-  -v "$WORKSPACE_UV_PYTHON_DIR":/aisb-codex/uv-python:rw,nosuid,nodev,z \
-  -v "$WORKSPACE_VENV_DIR":/aisb-codex/venv:rw,nosuid,nodev,Z \
-  -v "$WORKSPACE_PYTEST_CACHE_DIR":/aisb-codex/pytest:rw,nosuid,nodev,z \
-  -w "$ROOT" \
-  "$IMAGE" \
-  "${CODEX_FLAGS[@]}" \
-  "$@"
+exec podman run "${TTY_FLAGS[@]}" "${COMMON_PODMAN_ARGS[@]}" \
+  "${SECCOMP_OPTS[@]}" "${OPENAI_OPTS[@]}" "${GH_OPTS[@]}" "${TOOL_MOUNTS[@]}" \
+  "$IMAGE" "${CODEX_FLAGS[@]}" "$@"
