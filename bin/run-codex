@@ -43,6 +43,21 @@ if [[ -n "${OPENAI_API_KEY:-}" ]]; then
   OPENAI_OPTS+=(-e "OPENAI_API_KEY=$OPENAI_API_KEY")
 fi
 
+if [[ "${AISB_QUIET:-0}" != "1" ]]; then
+  echo "[aisb:codex] codex state: $CODEX_DIR" >&2
+  echo "[aisb:codex] codex auth/config: $HOME/.codex/auth.json and config.toml ($AUTH_MODE)" >&2
+  if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+    echo "[aisb:codex] codex env: forwarding OPENAI_API_KEY" >&2
+  else
+    echo "[aisb:codex] codex env: OPENAI_API_KEY not set" >&2
+  fi
+  if [[ "${CODEX_SAFE_MODE:-0}" == "1" ]]; then
+    echo "[aisb:codex] codex sandbox: native approvals enabled" >&2
+  else
+    echo "[aisb:codex] codex sandbox: bypassed with --dangerously-bypass-approvals-and-sandbox" >&2
+  fi
+fi
+
 exec podman run "${COMMON_PODMAN_ARGS[@]}" \
   "${OPENAI_OPTS[@]}" "${TOOL_MOUNTS[@]}" \
   "$IMAGE" "${CODEX_FLAGS[@]}" "$@"

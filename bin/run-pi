@@ -37,11 +37,27 @@ fi
 
 # Forward API keys and editor preferences that pi reads
 PI_OPTS=()
+PI_FORWARDED_VARS=()
 for var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY TOGETHER_API_KEY PI_CODING_AGENT_DIR PI_TELEMETRY PI_CACHE_RETENTION PI_SKIP_VERSION_CHECK VISUAL EDITOR; do
   if [[ -n "${!var:-}" ]]; then
     PI_OPTS+=(-e "${var}=${!var}")
+    PI_FORWARDED_VARS+=("$var")
   fi
 done
+
+if [[ "${AISB_QUIET:-0}" != "1" ]]; then
+  echo "[aisb:pi] pi state: $PI_DIR" >&2
+  if [[ -f "$PROJECT_MODELS" ]]; then
+    echo "[aisb:pi] pi models: $PROJECT_MODELS (repo override)" >&2
+  else
+    echo "[aisb:pi] pi models: default" >&2
+  fi
+  if ((${#PI_FORWARDED_VARS[@]})); then
+    echo "[aisb:pi] pi env: forwarding ${PI_FORWARDED_VARS[*]}" >&2
+  else
+    echo "[aisb:pi] pi env: no optional vars forwarded" >&2
+  fi
+fi
 
 exec podman run "${COMMON_PODMAN_ARGS[@]}" \
   "${PI_OPTS[@]}" "${TOOL_MOUNTS[@]}" \

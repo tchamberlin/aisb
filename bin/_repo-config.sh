@@ -141,6 +141,50 @@ aisb_repo_base_is_local_containerfile() {
     && "${AISB_REPO_BASE_IMAGE:-}" == "$AISB_REPO_AUTO_BASE_IMAGE" ]]
 }
 
+aisb_repo_config_summary() {
+  if [[ "${AISB_REPO_ENV_HAS_BASE_IMAGE:-0}" == "1" ]]; then
+    printf '%s sets AISB_BASE_IMAGE=%s\n' "$AISB_REPO_ENV_FILE" "$AISB_REPO_BASE_IMAGE"
+  elif aisb_repo_base_is_local_containerfile; then
+    if [[ -f "${AISB_REPO_ENV_FILE:-}" ]]; then
+      printf '%s has no AISB_BASE_IMAGE; using %s as generated base %s\n' \
+        "$AISB_REPO_ENV_FILE" "$AISB_REPO_CONTAINERFILE" "$AISB_REPO_BASE_IMAGE"
+    else
+      printf 'no .aisb.env; using %s as generated base %s\n' \
+        "$AISB_REPO_CONTAINERFILE" "$AISB_REPO_BASE_IMAGE"
+    fi
+  elif [[ -f "${AISB_REPO_ENV_FILE:-}" ]]; then
+    printf '%s has no AISB_BASE_IMAGE\n' "$AISB_REPO_ENV_FILE"
+  else
+    printf 'no .aisb.env or project Containerfile\n'
+  fi
+}
+
+aisb_tool_image_source_summary() {
+  local tool="$1"
+  local env_var
+  env_var="$(aisb_tool_image_env_var "$tool")"
+
+  if [[ -n "${!env_var:-}" ]]; then
+    printf '%s override\n' "$env_var"
+  elif [[ -n "${AISB_REPO_BASE_IMAGE:-}" ]]; then
+    if [[ "$tool" == "sb" ]]; then
+      if aisb_repo_base_is_local_containerfile; then
+        printf 'generated from project Containerfile\n'
+      else
+        printf 'repo base image\n'
+      fi
+    else
+      if aisb_repo_base_is_local_containerfile; then
+        printf 'repo-derived tool image from generated base %s\n' "$AISB_REPO_BASE_IMAGE"
+      else
+        printf 'repo-derived tool image from base %s\n' "$AISB_REPO_BASE_IMAGE"
+      fi
+    fi
+  else
+    printf 'default image\n'
+  fi
+}
+
 aisb_resolve_tool_image() {
   local tool="$1"
   local hash="$2"

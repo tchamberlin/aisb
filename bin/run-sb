@@ -16,6 +16,7 @@ set -euo pipefail
 #   AISB_MEMORY       memory cap passed to --memory (default: 8g)
 #   AISB_CPUS         cpu cap passed to --cpus (default: 4)
 #   AISB_PIDS         pid cap passed to --pids-limit (default: 1024)
+#   AISB_QUIET=1      suppress startup summary logs
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]}"
 while [[ -L "$SCRIPT_SOURCE" ]]; do
@@ -67,6 +68,44 @@ check_workspace_root() {
       return 0
     fi
     die_dangerous_root "$root"
+  fi
+}
+
+log_startup() {
+  [[ "${AISB_QUIET:-0}" == "1" ]] && return 0
+
+  echo "[aisb:sb] workspace: $ROOT (hash=$HASH)" >&2
+  echo "[aisb:sb] repo config: $(aisb_repo_config_summary)" >&2
+  echo "[aisb:sb] image: $IMAGE ($(aisb_tool_image_source_summary sb))" >&2
+  echo "[aisb:sb] container name: $NAME" >&2
+  echo "[aisb:sb] workspace mount: $WORKSPACE_MOUNT_OPTS" >&2
+  echo "[aisb:sb] uv cache: $UV_CACHE" >&2
+  echo "[aisb:sb] uv python: $UV_PYTHON_DIR" >&2
+  echo "[aisb:sb] venv: $VENV_DIR" >&2
+  echo "[aisb:sb] limits: memory=$AISB_MEMORY cpus=$AISB_CPUS pids=$AISB_PIDS" >&2
+
+  if [[ "${AISB_NO_NETWORK:-0}" == "1" ]]; then
+    echo "[aisb:sb] network: disabled" >&2
+  else
+    echo "[aisb:sb] network: enabled" >&2
+  fi
+
+  if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
+    echo "[aisb:sb] workspace relabel: enabled" >&2
+  else
+    echo "[aisb:sb] workspace relabel: disabled" >&2
+  fi
+
+  echo "[aisb:sb] seccomp: ${SECCOMP_SUMMARY:-podman default}" >&2
+
+  if [[ -n "${GH_TOKEN:-}" ]]; then
+    echo "[aisb:sb] gh auth: GH_TOKEN env" >&2
+  elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    echo "[aisb:sb] gh auth: GITHUB_TOKEN env" >&2
+  elif [[ -d "$GH_HOST_CONFIG" ]]; then
+    echo "[aisb:sb] gh auth: mounted $GH_HOST_CONFIG" >&2
+  else
+    echo "[aisb:sb] gh auth: none detected" >&2
   fi
 }
 
@@ -170,20 +209,23 @@ fi
 WORKSPACE_MOUNT_OPTS="rw,nosuid,nodev"
 if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
   WORKSPACE_MOUNT_OPTS+=",z"
-  echo "sb: workspace SELinux relabel enabled for $ROOT" >&2
 fi
 
 # Optional: extra seccomp denies on top of podman's default profile
 SECCOMP_OPTS=()
+SECCOMP_SUMMARY="podman default"
 if [[ "${AISB_STRICT_SECCOMP:-0}" == "1" ]]; then
   REPO_ROOT="$(dirname "$SCRIPT_DIR")"
   SECCOMP_PROFILE="${AISB_SECCOMP_PROFILE:-$REPO_ROOT/seccomp-strict.json}"
   if [[ -r "$SECCOMP_PROFILE" ]]; then
     SECCOMP_OPTS+=(--security-opt "seccomp=$SECCOMP_PROFILE")
+    SECCOMP_SUMMARY="$SECCOMP_PROFILE"
   else
     echo "warn: AISB_STRICT_SECCOMP=1 but $SECCOMP_PROFILE is not readable; using default" >&2
   fi
 fi
+
+log_startup
 
 exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   --name "$NAME" \

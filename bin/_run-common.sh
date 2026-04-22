@@ -24,6 +24,40 @@ _AISB_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/_repo-config.sh
 source "$_AISB_COMMON_DIR/_repo-config.sh"
 
+# shellcheck disable=SC2153 # TOOL is set by wrappers before common_init.
+common_log_startup() {
+  [[ "${AISB_QUIET:-0}" == "1" ]] && return 0
+
+  echo "[aisb:${TOOL}] workspace: $ROOT (hash=$HASH)" >&2
+  echo "[aisb:${TOOL}] repo config: $(aisb_repo_config_summary)" >&2
+  echo "[aisb:${TOOL}] image: $IMAGE ($(aisb_tool_image_source_summary "$TOOL"))" >&2
+  echo "[aisb:${TOOL}] container name: $NAME" >&2
+  echo "[aisb:${TOOL}] workspace mount: $WORKSPACE_MOUNT_OPTS" >&2
+  echo "[aisb:${TOOL}] auth/repo mode: auth=$AUTH_MODE repo=$REPO_MODE" >&2
+  echo "[aisb:${TOOL}] state: $WORKSPACE_STATE_DIR" >&2
+  echo "[aisb:${TOOL}] cache: $WORKSPACE_CACHE_DIR" >&2
+  echo "[aisb:${TOOL}] uv cache: $WORKSPACE_UV_CACHE_DIR" >&2
+  echo "[aisb:${TOOL}] limits: memory=$AISB_MEMORY cpus=$AISB_CPUS pids=$AISB_PIDS" >&2
+
+  if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
+    echo "[aisb:${TOOL}] workspace relabel: enabled" >&2
+  else
+    echo "[aisb:${TOOL}] workspace relabel: disabled" >&2
+  fi
+
+  echo "[aisb:${TOOL}] seccomp: ${COMMON_SECCOMP_SUMMARY:-podman default}" >&2
+
+  if [[ -n "${GH_TOKEN:-}" ]]; then
+    echo "[aisb:${TOOL}] gh auth: GH_TOKEN env" >&2
+  elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    echo "[aisb:${TOOL}] gh auth: GITHUB_TOKEN env" >&2
+  elif [[ -d "${XDG_CONFIG_HOME:-$HOME/.config}/gh" ]]; then
+    echo "[aisb:${TOOL}] gh auth: mounted ${XDG_CONFIG_HOME:-$HOME/.config}/gh" >&2
+  else
+    echo "[aisb:${TOOL}] gh auth: none detected" >&2
+  fi
+}
+
 common_init() {
   : "${TOOL:?TOOL must be set before common_init}"
   : "${USER_NAME:?USER_NAME must be set before common_init}"
@@ -83,7 +117,6 @@ common_init() {
     if [[ "${AISB_AUTH_WRITE_KEEP_REPO_RW:-0}" != "1" ]]; then
       REPO_MODE="ro"
     fi
-    echo "${TOOL}: auth-write mode (auth=rw, repo=$REPO_MODE)" >&2
   else
     AUTH_MODE="ro"
     REPO_MODE="rw"
@@ -92,12 +125,12 @@ common_init() {
   WORKSPACE_MOUNT_OPTS="${REPO_MODE},nosuid,nodev"
   if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
     WORKSPACE_MOUNT_OPTS+=",z"
-    echo "${TOOL}: workspace SELinux relabel enabled for $ROOT" >&2
   fi
 
   : "${AISB_MEMORY:=8g}"
   : "${AISB_CPUS:=4}"
   : "${AISB_PIDS:=1024}"
+  COMMON_SECCOMP_SUMMARY="podman default"
 
   _common_warn_memory
 
@@ -150,6 +183,7 @@ common_init() {
   _common_append_tty
   _common_append_gh
   _common_append_seccomp
+  common_log_startup
 }
 
 common_die_dangerous_root() {
@@ -247,6 +281,7 @@ _common_append_seccomp() {
   seccomp_profile="${AISB_SECCOMP_PROFILE:-$repo_root/seccomp-strict.json}"
   if [[ -r "$seccomp_profile" ]]; then
     COMMON_PODMAN_ARGS+=(--security-opt "seccomp=$seccomp_profile")
+    COMMON_SECCOMP_SUMMARY="$seccomp_profile"
   else
     echo "warn: AISB_STRICT_SECCOMP=1 but $seccomp_profile is not readable; using default" >&2
   fi

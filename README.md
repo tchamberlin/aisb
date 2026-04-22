@@ -64,6 +64,9 @@ The wrappers:
   venvs, uv caches) under `$XDG_STATE_HOME/claude-podman/` and
   `$XDG_CACHE_HOME/claude-podman/` — survives container removal and image
   rebuilds
+- print a short startup summary to stderr with the workspace, repo config,
+  selected image, mount modes, state/cache paths, resource caps, and enabled
+  hardening options. Set `AISB_QUIET=1` to suppress these messages.
 - do not relabel the workspace mount by default; on SELinux hosts this may
   fail closed with permission denied instead of changing host labels. Set
   `AISB_RELABEL_WORKSPACE=1` only for a narrow project directory that you
@@ -152,6 +155,7 @@ Per-wrapper overrides:
 | `AISB_AUTH_WRITE_KEEP_REPO_RW=1` | In auth-write mode, keep the repo writable.                     |
 | `AISB_ALLOW_NON_GIT_WORKSPACE=1` | Allow agent wrappers from a non-git `$PWD`.                    |
 | `AISB_ALLOW_DANGEROUS_ROOT=1` | Allow broad workspace roots like `$HOME` or `/` intentionally.     |
+| `AISB_QUIET=1`             | Suppress wrapper startup summary logs.                           |
 | `AISB_RELABEL_WORKSPACE=1` | Add `:z` to the workspace mount for SELinux relabeling.               |
 | `AISB_MEMORY`              | `--memory` cap (default `8g`).                                        |
 | `AISB_CPUS`                | `--cpus` cap (default `4`).                                           |
