@@ -16,6 +16,7 @@ set -euo pipefail
 #   AISB_MEMORY       memory cap passed to --memory (default: 8g)
 #   AISB_CPUS         cpu cap passed to --cpus (default: 4)
 #   AISB_PIDS         pid cap passed to --pids-limit (default: 1024)
+#   AISB_DEBUG=1      print detailed mount/auth/hardening diagnostics
 #   AISB_QUIET=1      suppress startup summary logs
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]}"
@@ -77,35 +78,42 @@ log_startup() {
   echo "[aisb:sb] workspace: $ROOT (hash=$HASH)" >&2
   echo "[aisb:sb] repo config: $(aisb_repo_config_summary)" >&2
   echo "[aisb:sb] image: $IMAGE ($(aisb_tool_image_source_summary sb))" >&2
-  echo "[aisb:sb] container name: $NAME" >&2
-  echo "[aisb:sb] workspace mount: $WORKSPACE_MOUNT_OPTS" >&2
-  echo "[aisb:sb] uv cache: $UV_CACHE" >&2
-  echo "[aisb:sb] uv python: $UV_PYTHON_DIR" >&2
-  echo "[aisb:sb] venv: $VENV_DIR" >&2
   echo "[aisb:sb] limits: memory=$AISB_MEMORY cpus=$AISB_CPUS pids=$AISB_PIDS" >&2
 
+  [[ "${AISB_DEBUG:-0}" == "1" ]] || return 0
+
+  echo "[aisb:sb:debug] container name: $NAME" >&2
+  echo "[aisb:sb:debug] workspace mount: $ROOT -> $ROOT ($WORKSPACE_MOUNT_OPTS)" >&2
+  echo "[aisb:sb:debug] mount /tmp: $TMP_DIR -> /tmp (bind rw,nosuid,nodev; host filesystem limit)" >&2
+  echo "[aisb:sb:debug] mount /home/sb: tmpfs size=256m rw,nosuid,nodev" >&2
+  echo "[aisb:sb:debug] mount /uv-bin: tmpfs size=128m rw,nosuid,nodev" >&2
+  echo "[aisb:sb:debug] mount /uv-tools: tmpfs size=256m rw,nosuid,nodev" >&2
+  echo "[aisb:sb:debug] mount uv cache: $UV_CACHE -> /uv-cache (bind rw,nosuid,nodev)" >&2
+  echo "[aisb:sb:debug] mount uv python: $UV_PYTHON_DIR -> /uv-python (bind rw,nosuid,nodev)" >&2
+  echo "[aisb:sb:debug] mount venv: $VENV_DIR -> /venv (bind rw,nosuid,nodev)" >&2
+
   if [[ "${AISB_NO_NETWORK:-0}" == "1" ]]; then
-    echo "[aisb:sb] network: disabled" >&2
+    echo "[aisb:sb:debug] network: disabled" >&2
   else
-    echo "[aisb:sb] network: enabled" >&2
+    echo "[aisb:sb:debug] network: enabled" >&2
   fi
 
   if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
-    echo "[aisb:sb] workspace relabel: enabled" >&2
+    echo "[aisb:sb:debug] workspace relabel: enabled" >&2
   else
-    echo "[aisb:sb] workspace relabel: disabled" >&2
+    echo "[aisb:sb:debug] workspace relabel: disabled" >&2
   fi
 
-  echo "[aisb:sb] seccomp: ${SECCOMP_SUMMARY:-podman default}" >&2
+  echo "[aisb:sb:debug] seccomp: ${SECCOMP_SUMMARY:-podman default}" >&2
 
   if [[ -n "${GH_TOKEN:-}" ]]; then
-    echo "[aisb:sb] gh auth: GH_TOKEN env" >&2
+    echo "[aisb:sb:debug] gh auth: GH_TOKEN env" >&2
   elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    echo "[aisb:sb] gh auth: GITHUB_TOKEN env" >&2
+    echo "[aisb:sb:debug] gh auth: GITHUB_TOKEN env" >&2
   elif [[ -d "$GH_HOST_CONFIG" ]]; then
-    echo "[aisb:sb] gh auth: mounted $GH_HOST_CONFIG" >&2
+    echo "[aisb:sb:debug] gh auth: mounted $GH_HOST_CONFIG" >&2
   else
-    echo "[aisb:sb] gh auth: none detected" >&2
+    echo "[aisb:sb:debug] gh auth: none detected" >&2
   fi
 }
 
@@ -141,10 +149,13 @@ STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/claude-podman"
 UV_CACHE="${CACHE_BASE}/uv/${HASH}"
 UV_PYTHON_DIR="${STATE_BASE}/uv-python/${HASH}"
 VENV_DIR="${STATE_BASE}/venvs/${HASH}/${STAMP}-$$"
-mkdir -p "$UV_CACHE" "$UV_PYTHON_DIR" "$VENV_DIR"
+TMP_DIR="${STATE_BASE}/sb/${HASH}/tmp/${STAMP}-$$"
+mkdir -p "$UV_CACHE" "$UV_PYTHON_DIR" "$VENV_DIR" "$TMP_DIR"
+chmod 1777 "$TMP_DIR"
 
-# Prune per-invocation venv dirs older than 7 days
+# Prune per-invocation dirs.
 find "${STATE_BASE}/venvs/${HASH}" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+find "${STATE_BASE}/sb/${HASH}/tmp" -mindepth 1 -maxdepth 1 -type d -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
 
 # Forward common API keys + editor prefs
 ENV_OPTS=()
@@ -239,7 +250,6 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   --pids-limit="$AISB_PIDS" \
   "${NET_OPTS[@]}" \
   "${SECCOMP_OPTS[@]}" \
-  --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
   --tmpfs /home/sb:rw,nosuid,nodev,size=256m,mode=1777 \
   --tmpfs /uv-bin:rw,nosuid,nodev,size=128m,mode=1777 \
   --tmpfs /uv-tools:rw,nosuid,nodev,size=256m,mode=1777 \
@@ -249,6 +259,9 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   -e HOME=/home/sb \
   -e TERM="${TERM:-xterm-256color}" \
   -e COLORTERM="${COLORTERM:-truecolor}" \
+  -e TMPDIR=/tmp \
+  -e TMP=/tmp \
+  -e TEMP=/tmp \
   -e UV_CACHE_DIR=/uv-cache \
   -e UV_PYTHON_INSTALL_DIR=/uv-python \
   -e UV_PROJECT_ENVIRONMENT=/venv \
@@ -258,6 +271,7 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   "${ENV_OPTS[@]}" \
   "${GH_OPTS[@]}" \
   -v "$ROOT":"$ROOT":"$WORKSPACE_MOUNT_OPTS" \
+  -v "$TMP_DIR":/tmp:rw,nosuid,nodev,Z \
   -v "$UV_CACHE":/uv-cache:rw,nosuid,nodev,z \
   -v "$UV_PYTHON_DIR":/uv-python:rw,nosuid,nodev,z \
   -v "$VENV_DIR":/venv:rw,nosuid,nodev,Z \

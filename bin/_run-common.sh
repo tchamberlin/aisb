@@ -10,7 +10,8 @@
 #   ROOT, BASE, HASH, STAMP, NAME
 #   CACHE_BASE, STATE_BASE
 #   WORKSPACE_CACHE_DIR, WORKSPACE_STATE_DIR, WORKSPACE_UV_CACHE_DIR,
-#   WORKSPACE_UV_PYTHON_DIR, WORKSPACE_VENV_DIR, WORKSPACE_PYTEST_CACHE_DIR
+#   WORKSPACE_UV_PYTHON_DIR, WORKSPACE_VENV_DIR, WORKSPACE_PYTEST_CACHE_DIR,
+#   WORKSPACE_TMP_DIR
 #   AUTH_MODE, REPO_MODE
 #   COMMON_PODMAN_ARGS (all shared podman flags: base hardening, tty, gh
 #                       auth passthrough, optional strict seccomp)
@@ -31,30 +32,40 @@ common_log_startup() {
   echo "[aisb:${TOOL}] workspace: $ROOT (hash=$HASH)" >&2
   echo "[aisb:${TOOL}] repo config: $(aisb_repo_config_summary)" >&2
   echo "[aisb:${TOOL}] image: $IMAGE ($(aisb_tool_image_source_summary "$TOOL"))" >&2
-  echo "[aisb:${TOOL}] container name: $NAME" >&2
-  echo "[aisb:${TOOL}] workspace mount: $WORKSPACE_MOUNT_OPTS" >&2
-  echo "[aisb:${TOOL}] auth/repo mode: auth=$AUTH_MODE repo=$REPO_MODE" >&2
-  echo "[aisb:${TOOL}] state: $WORKSPACE_STATE_DIR" >&2
-  echo "[aisb:${TOOL}] cache: $WORKSPACE_CACHE_DIR" >&2
-  echo "[aisb:${TOOL}] uv cache: $WORKSPACE_UV_CACHE_DIR" >&2
   echo "[aisb:${TOOL}] limits: memory=$AISB_MEMORY cpus=$AISB_CPUS pids=$AISB_PIDS" >&2
 
+  [[ "${AISB_DEBUG:-0}" == "1" ]] || return 0
+
+  echo "[aisb:${TOOL}:debug] container name: $NAME" >&2
+  echo "[aisb:${TOOL}:debug] workspace mount: $ROOT -> $ROOT ($WORKSPACE_MOUNT_OPTS)" >&2
+  echo "[aisb:${TOOL}:debug] auth/repo mode: auth=$AUTH_MODE repo=$REPO_MODE" >&2
+  echo "[aisb:${TOOL}:debug] mount /tmp: $WORKSPACE_TMP_DIR -> /tmp (bind rw,nosuid,nodev; host filesystem limit)" >&2
+  echo "[aisb:${TOOL}:debug] mount ${USER_HOME}: tmpfs size=256m rw,nosuid,nodev" >&2
+  echo "[aisb:${TOOL}:debug] mount /uv-bin: tmpfs size=128m rw,nosuid,nodev" >&2
+  echo "[aisb:${TOOL}:debug] mount /uv-tools: tmpfs size=256m rw,nosuid,nodev" >&2
+  echo "[aisb:${TOOL}:debug] mount cache: $WORKSPACE_CACHE_DIR -> /aisb-${TOOL}/cache (bind rw,nosuid,nodev)" >&2
+  echo "[aisb:${TOOL}:debug] mount state: $WORKSPACE_STATE_DIR -> /aisb-${TOOL}/state (bind rw,nosuid,nodev)" >&2
+  echo "[aisb:${TOOL}:debug] mount uv cache: $WORKSPACE_UV_CACHE_DIR -> /aisb-${TOOL}/uv-cache (bind rw,nosuid,nodev)" >&2
+  echo "[aisb:${TOOL}:debug] mount uv python: $WORKSPACE_UV_PYTHON_DIR -> /aisb-${TOOL}/uv-python (bind rw,nosuid,nodev)" >&2
+  echo "[aisb:${TOOL}:debug] mount venv: $WORKSPACE_VENV_DIR -> /aisb-${TOOL}/venv (bind rw,nosuid,nodev)" >&2
+  echo "[aisb:${TOOL}:debug] mount pytest cache: $WORKSPACE_PYTEST_CACHE_DIR -> /aisb-${TOOL}/pytest (bind rw,nosuid,nodev)" >&2
+
   if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
-    echo "[aisb:${TOOL}] workspace relabel: enabled" >&2
+    echo "[aisb:${TOOL}:debug] workspace relabel: enabled" >&2
   else
-    echo "[aisb:${TOOL}] workspace relabel: disabled" >&2
+    echo "[aisb:${TOOL}:debug] workspace relabel: disabled" >&2
   fi
 
-  echo "[aisb:${TOOL}] seccomp: ${COMMON_SECCOMP_SUMMARY:-podman default}" >&2
+  echo "[aisb:${TOOL}:debug] seccomp: ${COMMON_SECCOMP_SUMMARY:-podman default}" >&2
 
   if [[ -n "${GH_TOKEN:-}" ]]; then
-    echo "[aisb:${TOOL}] gh auth: GH_TOKEN env" >&2
+    echo "[aisb:${TOOL}:debug] gh auth: GH_TOKEN env" >&2
   elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    echo "[aisb:${TOOL}] gh auth: GITHUB_TOKEN env" >&2
+    echo "[aisb:${TOOL}:debug] gh auth: GITHUB_TOKEN env" >&2
   elif [[ -d "${XDG_CONFIG_HOME:-$HOME/.config}/gh" ]]; then
-    echo "[aisb:${TOOL}] gh auth: mounted ${XDG_CONFIG_HOME:-$HOME/.config}/gh" >&2
+    echo "[aisb:${TOOL}:debug] gh auth: mounted ${XDG_CONFIG_HOME:-$HOME/.config}/gh" >&2
   else
-    echo "[aisb:${TOOL}] gh auth: none detected" >&2
+    echo "[aisb:${TOOL}:debug] gh auth: none detected" >&2
   fi
 }
 
@@ -95,6 +106,7 @@ common_init() {
   WORKSPACE_UV_PYTHON_DIR="${STATE_BASE}/${TOOL}/${HASH}/uv-python"
   WORKSPACE_VENV_DIR="${STATE_BASE}/${TOOL}/${HASH}/venvs/${STAMP}-$$"
   WORKSPACE_PYTEST_CACHE_DIR="${STATE_BASE}/${TOOL}/${HASH}/pytest"
+  WORKSPACE_TMP_DIR="${STATE_BASE}/${TOOL}/${HASH}/tmp/${STAMP}-$$"
 
   mkdir -p \
     "$WORKSPACE_CACHE_DIR" \
@@ -102,11 +114,14 @@ common_init() {
     "$WORKSPACE_UV_CACHE_DIR" \
     "$WORKSPACE_UV_PYTHON_DIR" \
     "$WORKSPACE_VENV_DIR" \
-    "$WORKSPACE_PYTEST_CACHE_DIR"
+    "$WORKSPACE_PYTEST_CACHE_DIR" \
+    "$WORKSPACE_TMP_DIR"
+  chmod 1777 "$WORKSPACE_TMP_DIR"
 
-  # Prune per-invocation venv dirs older than 7 days, scoped per tool so
-  # tools don't blow away each other's caches.
+  # Prune per-invocation dirs, scoped per tool so tools don't blow away each
+  # other's caches.
   find "${STATE_BASE}/${TOOL}/${HASH}/venvs" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+  find "${STATE_BASE}/${TOOL}/${HASH}/tmp" -mindepth 1 -maxdepth 1 -type d -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
 
   local tool_upper tool_auth_var
   tool_upper="${TOOL^^}"
@@ -150,7 +165,6 @@ common_init() {
     --memory="$AISB_MEMORY"
     --cpus="$AISB_CPUS"
     --pids-limit="$AISB_PIDS"
-    --tmpfs "/tmp:rw,nosuid,nodev,size=512m"
     --tmpfs "${USER_HOME}:rw,nosuid,nodev,size=256m"
     --tmpfs "/uv-bin:rw,nosuid,nodev,size=128m"
     --tmpfs "/uv-tools:rw,nosuid,nodev,size=256m"
@@ -164,6 +178,9 @@ common_init() {
     -e "GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-$host_git_email}"
     -e "GIT_COMMITTER_NAME=${GIT_COMMITTER_NAME:-$host_git_name}"
     -e "GIT_COMMITTER_EMAIL=${GIT_COMMITTER_EMAIL:-$host_git_email}"
+    -e "TMPDIR=/tmp"
+    -e "TMP=/tmp"
+    -e "TEMP=/tmp"
     -e "XDG_CACHE_HOME=/aisb-${TOOL}/cache"
     -e "XDG_STATE_HOME=/aisb-${TOOL}/state"
     -e "UV_CACHE_DIR=/aisb-${TOOL}/uv-cache"
@@ -171,6 +188,7 @@ common_init() {
     -e "UV_PROJECT_ENVIRONMENT=/aisb-${TOOL}/venv"
     -e "PYTEST_ADDOPTS=${PYTEST_ADDOPTS:-} -o cache_dir=/aisb-${TOOL}/pytest"
     -v "${ROOT}:${ROOT}:${WORKSPACE_MOUNT_OPTS}"
+    -v "${WORKSPACE_TMP_DIR}:/tmp:rw,nosuid,nodev,Z"
     -v "${WORKSPACE_CACHE_DIR}:/aisb-${TOOL}/cache:rw,nosuid,nodev,z"
     -v "${WORKSPACE_STATE_DIR}:/aisb-${TOOL}/state:rw,nosuid,nodev,z"
     -v "${WORKSPACE_UV_CACHE_DIR}:/aisb-${TOOL}/uv-cache:rw,nosuid,nodev,z"
