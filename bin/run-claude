@@ -30,15 +30,15 @@ common_check_image
 # edits propagate immediately and the container cannot mutate it. .claude.json
 # and the rest of .claude are snapshotted per-repo below to contain
 # prompt-injected config mutations.
-touch "$HOME/.claude.json"
 mkdir -p "$HOME/.claude"
-touch "$HOME/.claude/.credentials.json"
-touch "$HOME/.claude/settings.json"
+common_ensure_json_object_file "$HOME/.claude.json" "Claude host config"
+common_ensure_json_object_file "$HOME/.claude/.credentials.json" "Claude credentials"
+common_ensure_json_object_file "$HOME/.claude/settings.json" "Claude settings"
 
 CLAUDE_DIR="${STATE_BASE}/claude/${HASH}/dot-claude"
 mkdir -p "$CLAUDE_DIR"
 # Placeholder target for the settings.json file bind-mount below.
-touch "$CLAUDE_DIR/settings.json"
+common_ensure_json_object_file "$CLAUDE_DIR/settings.json" "Claude repo settings placeholder"
 
 common_require_mount_path "$CLAUDE_DIR" "Claude state source path"
 common_require_mount_path "${USER_HOME}/.claude" "Claude state destination path"
@@ -50,9 +50,10 @@ if [[ ! -e "$CLAUDE_DIR/claude.json" ]]; then
   if [[ -s "$HOME/.claude.json" ]]; then
     cp -p "$HOME/.claude.json" "$CLAUDE_DIR/claude.json"
   else
-    : > "$CLAUDE_DIR/claude.json"
+    common_ensure_json_object_file "$CLAUDE_DIR/claude.json" "Claude repo config"
   fi
 fi
+common_ensure_json_object_file "$CLAUDE_DIR/claude.json" "Claude repo config"
 
 TOOL_MOUNTS=(
   -v "${CLAUDE_DIR}:${USER_HOME}/.claude:rw,nosuid,nodev,noexec,z"
@@ -68,8 +69,9 @@ fi
 
 if [[ "${AISB_QUIET:-0}" != "1" ]]; then
   echo "[aisb:claude] claude state: $CLAUDE_DIR" >&2
-  echo "[aisb:claude] claude credentials: $HOME/.claude/.credentials.json (rw)" >&2
-  echo "[aisb:claude] claude settings: $HOME/.claude/settings.json (ro)" >&2
+  echo "[aisb:claude] claude host config: $HOME/.claude.json -> ${USER_HOME}/.claude.json (rw)" >&2
+  echo "[aisb:claude] claude credentials: $HOME/.claude/.credentials.json -> ${USER_HOME}/.claude/.credentials.json (rw)" >&2
+  echo "[aisb:claude] claude settings: $HOME/.claude/settings.json -> ${USER_HOME}/.claude/settings.json (ro)" >&2
   if [[ "${CLAUDE_SAFE_MODE:-0}" == "1" ]]; then
     echo "[aisb:claude] claude permissions: native prompts enabled" >&2
   else

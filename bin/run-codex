@@ -26,7 +26,7 @@ common_check_image
 # Only auth.json + config.toml are shared across repos (OAuth token + user
 # config). Everything else (sessions, logs, caches) is scoped per-repo.
 mkdir -p "$HOME/.codex"
-touch "$HOME/.codex/auth.json"
+common_ensure_json_object_file "$HOME/.codex/auth.json" "Codex auth"
 touch "$HOME/.codex/config.toml"
 
 CODEX_DIR="${STATE_BASE}/codex/${HASH}/dot-codex"
@@ -54,7 +54,8 @@ fi
 
 if [[ "${AISB_QUIET:-0}" != "1" ]]; then
   echo "[aisb:codex] codex state: $CODEX_DIR" >&2
-  echo "[aisb:codex] codex auth/config: $HOME/.codex/auth.json and config.toml ($AUTH_MODE)" >&2
+  echo "[aisb:codex] codex auth: $HOME/.codex/auth.json -> ${USER_HOME}/.codex/auth.json ($AUTH_MODE)" >&2
+  echo "[aisb:codex] codex config: $HOME/.codex/config.toml -> ${USER_HOME}/.codex/config.toml ($AUTH_MODE)" >&2
   if [[ -n "${OPENAI_API_KEY:-}" ]]; then
     echo "[aisb:codex] codex env: forwarding OPENAI_API_KEY" >&2
   else

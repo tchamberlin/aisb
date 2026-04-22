@@ -326,6 +326,20 @@ common_require_mount_path() {
   fi
 }
 
+common_ensure_json_object_file() {
+  local path="$1"
+  local description="$2"
+
+  if [[ -e "$path" && ! -f "$path" ]]; then
+    echo "Error: $description exists but is not a regular file: $path" >&2
+    exit 1
+  fi
+
+  if [[ ! -s "$path" ]] || ! grep -q '[^[:space:]]' "$path"; then
+    ( umask 077; printf '{}\n' > "$path" )
+  fi
+}
+
 common_check_workspace_bind_paths() {
   common_require_mount_path "$ROOT" "workspace source path"
   common_require_mount_path "$ROOT" "workspace destination path"
