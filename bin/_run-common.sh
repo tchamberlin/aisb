@@ -6,9 +6,6 @@
 #   USER_NAME  — container user login name (e.g. "sb", "codex")
 #   USER_HOME  — absolute home path inside the container
 #
-# Optional caller input:
-#   USER_GECOS — GECOS (display name) field in passwd-entry. Defaults to USER_NAME.
-#
 # After common_init the following are available to the caller:
 #   ROOT, BASE, HASH, STAMP, NAME
 #   CACHE_BASE, STATE_BASE
@@ -31,7 +28,6 @@ common_init() {
   : "${TOOL:?TOOL must be set before common_init}"
   : "${USER_NAME:?USER_NAME must be set before common_init}"
   : "${USER_HOME:?USER_HOME must be set before common_init}"
-  : "${USER_GECOS:=$USER_NAME}"
 
   if git rev-parse --show-toplevel >/dev/null 2>&1; then
     ROOT="$(git rev-parse --show-toplevel)"
@@ -114,7 +110,7 @@ common_init() {
     --pull=never
     --name "$NAME"
     --userns=keep-id
-    --passwd-entry "${USER_NAME}:x:\$UID:\$GID:${USER_GECOS}:${USER_HOME}:/bin/bash"
+    --passwd-entry "${USER_NAME}:x:\$UID:\$GID:${USER_NAME}:${USER_HOME}:/bin/bash"
     --cap-drop=all
     --security-opt no-new-privileges
     --read-only

@@ -17,20 +17,20 @@ source "$SCRIPT_DIR/_run-common.sh"
 common_init
 common_check_image
 
-# Ensure host-side files exist. Only .credentials.json is shared across repos
-# so OAuth token rotation persists; .claude.json and the rest of .claude are
-# snapshotted per-repo below to contain prompt-injected config mutations.
+# Ensure host-side files exist. .credentials.json is bind-mounted rw so OAuth
+# token rotation persists to the host; settings.json is bind-mounted ro so host
+# edits propagate immediately and the container cannot mutate it. .claude.json
+# and the rest of .claude are snapshotted per-repo below to contain
+# prompt-injected config mutations.
 touch "$HOME/.claude.json"
 mkdir -p "$HOME/.claude"
 touch "$HOME/.claude/.credentials.json"
+touch "$HOME/.claude/settings.json"
 
 CLAUDE_DIR="${STATE_BASE}/claude/${HASH}/dot-claude"
 mkdir -p "$CLAUDE_DIR"
-
-# Seed per-repo settings.json from host on first run for this repo.
-if [[ -s "$HOME/.claude/settings.json" && ! -e "$CLAUDE_DIR/settings.json" ]]; then
-  cp -p "$HOME/.claude/settings.json" "$CLAUDE_DIR/settings.json"
-fi
+# Placeholder target for the settings.json file bind-mount below.
+touch "$CLAUDE_DIR/settings.json"
 
 # Seed per-repo .claude.json from host on first run, else create an empty
 # placeholder so the bind-mount target exists.
@@ -45,6 +45,7 @@ fi
 TOOL_MOUNTS=(
   -v "${CLAUDE_DIR}:${USER_HOME}/.claude:rw,nosuid,nodev,noexec,z"
   -v "${CLAUDE_DIR}/claude.json:${USER_HOME}/.claude.json:rw,nosuid,nodev,noexec,z"
+  -v "${HOME}/.claude/settings.json:${USER_HOME}/.claude/settings.json:ro,nosuid,nodev,noexec,z"
   -v "${HOME}/.claude/.credentials.json:${USER_HOME}/.claude/.credentials.json:rw,nosuid,nodev,noexec,z"
 )
 

@@ -9,9 +9,9 @@ fresh container; only the current repo and per-agent auth are mounted.
 | File                   | What it is                                                               |
 | ---------------------- | ------------------------------------------------------------------------ |
 | `Containerfile.base`   | Fedora-minimal base: coreutils, Node 24, uv, Python 3.14, build tools.   |
-| `Containerfile.claude` | `claude` CLI on top of base (`claude-uv:latest`).                        |
-| `Containerfile.codex`  | OpenAI `codex` CLI on top of base (`codex-uv:latest`).                   |
-| `Containerfile.pi`     | `pi-coding-agent` CLI on top of base (`pi-uv:latest`).                   |
+| `Containerfile.claude` | `claude` CLI on top of base (`aisb-claude:latest`).                        |
+| `Containerfile.codex`  | OpenAI `codex` CLI on top of base (`aisb-codex:latest`).                   |
+| `Containerfile.pi`     | `pi-coding-agent` CLI on top of base (`aisb-pi:latest`).                   |
 | `bin/build-containers` | Build one or all images. Parallelizes the flavor builds.                 |
 | `bin/run-claude`       | Run Claude Code against the current repo.                                |
 | `bin/run-codex`        | Run Codex against the current repo.                                      |

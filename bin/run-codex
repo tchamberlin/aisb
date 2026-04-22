@@ -10,7 +10,6 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 
 TOOL="codex"
 USER_NAME="codex"
-USER_GECOS="Codex"
 USER_HOME="/home/codex"
 
 # shellcheck source=bin/_run-common.sh
