@@ -99,7 +99,7 @@ if [[ -z "${OPENAI_API_KEY:-}" ]] && codex_auth_is_empty && ! codex_command_allo
   echo >&2
   echo "No OPENAI_API_KEY is set and $HOME/.codex/auth.json has no account credentials." >&2
   echo "Run one of:" >&2
-  echo "  CODEX_AUTH_WRITE=1 codex login" >&2
+  echo "  CODEX_AUTH_WRITE=1 codex login --device-auth" >&2
   echo "  export OPENAI_API_KEY=..." >&2
   exit 1
 fi

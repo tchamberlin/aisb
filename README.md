@@ -204,7 +204,7 @@ Per-wrapper overrides:
 For a first-time Codex OAuth login, run:
 
 ```sh
-CODEX_AUTH_WRITE=1 codex login
+CODEX_AUTH_WRITE=1 codex login --device-auth
 ```
 
 ### Repo-specific base images
