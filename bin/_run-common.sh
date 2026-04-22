@@ -88,6 +88,10 @@ common_init() {
 
   _common_warn_memory
 
+  local host_git_name host_git_email
+  host_git_name="$(git config --get user.name 2>/dev/null || true)"
+  host_git_email="$(git config --get user.email 2>/dev/null || true)"
+
   COMMON_PODMAN_ARGS=(
     --rm
     --pull=never
@@ -110,6 +114,10 @@ common_init() {
     -e "HOME=${USER_HOME}"
     -e "TERM=${TERM:-xterm-256color}"
     -e "COLORTERM=${COLORTERM:-truecolor}"
+    -e "GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-$host_git_name}"
+    -e "GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-$host_git_email}"
+    -e "GIT_COMMITTER_NAME=${GIT_COMMITTER_NAME:-$host_git_name}"
+    -e "GIT_COMMITTER_EMAIL=${GIT_COMMITTER_EMAIL:-$host_git_email}"
     -e "XDG_CACHE_HOME=/aisb-${TOOL}/cache"
     -e "XDG_STATE_HOME=/aisb-${TOOL}/state"
     -e "UV_CACHE_DIR=/aisb-${TOOL}/uv-cache"
