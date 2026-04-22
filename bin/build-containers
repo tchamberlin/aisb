@@ -15,7 +15,7 @@ set -euo pipefail
 #
 # Each flavor's image tag matches what the run-* wrappers expect:
 #   base    -> localhost/aisb-base:latest, repo-provided AISB_BASE_IMAGE,
-#              or localhost/aisb-base-<repo-hash>:latest for a project Containerfile
+#              or localhost/aisb-<repo-name>-<repo-hash>:latest for a project Containerfile
 #   claude  -> aisb-claude:latest, or localhost/aisb-claude-<repo-hash>:latest
 #   codex   -> aisb-codex:latest, or localhost/aisb-codex-<repo-hash>:latest
 #   pi      -> aisb-pi:latest, or localhost/aisb-pi-<repo-hash>:latest

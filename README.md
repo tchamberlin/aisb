@@ -168,14 +168,14 @@ at the repo root. When `bin/build-containers` is run from that project, or with
 repo-scoped base image:
 
 ```sh
-localhost/aisb-base-<repo-hash>:latest
+localhost/aisb-<repo-name>-<repo-hash>:latest
 ```
 
 If `.aisb.env` does not already name a base image, interactive builds prompt to
 create or update it with that generated tag:
 
 ```sh
-AISB_BASE_IMAGE=localhost/aisb-base-<repo-hash>:latest
+AISB_BASE_IMAGE=localhost/aisb-<repo-name>-<repo-hash>:latest
 ```
 
 You can also choose your own existing base image by adding `.aisb.env` manually

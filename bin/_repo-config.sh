@@ -127,10 +127,12 @@ aisb_derived_tool_image() {
 aisb_auto_base_image() {
   local root="$1"
   local hash="${2:-}"
+  local base
   if [[ -z "$hash" ]]; then
     hash="$(aisb_sha1_10 "$root")"
   fi
-  printf 'localhost/aisb-base-%s:latest\n' "$hash"
+  base="$(aisb_workspace_base "$root")"
+  printf 'localhost/aisb-%s-%s:latest\n' "$base" "$hash"
 }
 
 aisb_repo_base_is_local_containerfile() {
