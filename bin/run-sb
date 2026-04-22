@@ -17,12 +17,55 @@ set -euo pipefail
 #   AISB_CPUS         cpu cap passed to --cpus (default: 4)
 #   AISB_PIDS         pid cap passed to --pids-limit (default: 1024)
 
+die_dangerous_root() {
+  local root="$1"
+  echo "Error: refusing to run sb with dangerous workspace root: $root" >&2
+  echo >&2
+  echo "This wrapper bind-mounts the workspace into a container." >&2
+  echo "Run it from a project directory or git repository instead." >&2
+  echo "To override intentionally, set AISB_ALLOW_DANGEROUS_ROOT=1." >&2
+  exit 1
+}
+
+check_workspace_root() {
+  local root="$1"
+  local home_real xdg_data containers_real dangerous
+  dangerous=0
+
+  home_real="$(realpath "$HOME" 2>/dev/null || printf '%s' "$HOME")"
+  xdg_data="${XDG_DATA_HOME:-$HOME/.local/share}"
+  containers_real="$(realpath "$xdg_data/containers" 2>/dev/null || true)"
+
+  case "$root" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var|/Users)
+      dangerous=1
+      ;;
+  esac
+
+  if [[ "$root" == "$home_real" ]]; then
+    dangerous=1
+  fi
+
+  if [[ -n "$containers_real" && ( "$root" == "$containers_real" || "$root" == "$containers_real"/* ) ]]; then
+    dangerous=1
+  fi
+
+  if (( dangerous )); then
+    if [[ "${AISB_ALLOW_DANGEROUS_ROOT:-0}" == "1" ]]; then
+      echo "warn: AISB_ALLOW_DANGEROUS_ROOT=1; allowing workspace root '$root'" >&2
+      return 0
+    fi
+    die_dangerous_root "$root"
+  fi
+}
+
 if git rev-parse --show-toplevel >/dev/null 2>&1; then
   ROOT="$(git rev-parse --show-toplevel)"
 else
   ROOT="$PWD"
 fi
 ROOT="$(realpath "$ROOT")"
+check_workspace_root "$ROOT"
 
 BASE="$(basename "$ROOT")"
 BASE="${BASE//[^A-Za-z0-9._-]/_}"
@@ -63,7 +106,7 @@ elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
 fi
 GH_HOST_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
 if [[ -d "$GH_HOST_CONFIG" ]]; then
-  GH_OPTS+=(-v "$GH_HOST_CONFIG":/home/sb/.config/gh:ro,nosuid,nodev,noexec,z)
+  GH_OPTS+=(-v "${GH_HOST_CONFIG}:/home/sb/.config/gh:ro,nosuid,nodev,noexec,z")
 fi
 
 # Interactive only if stdin is a tty
@@ -100,6 +143,12 @@ fi
 NET_OPTS=()
 if [[ "${AISB_NO_NETWORK:-0}" == "1" ]]; then
   NET_OPTS+=(--network=none)
+fi
+
+WORKSPACE_MOUNT_OPTS="rw,nosuid,nodev"
+if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
+  WORKSPACE_MOUNT_OPTS+=",z"
+  echo "sb: workspace SELinux relabel enabled for $ROOT" >&2
 fi
 
 # Optional: extra seccomp denies on top of podman's default profile
@@ -145,7 +194,7 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   -e XDG_CACHE_HOME=/tmp/xdg-cache \
   "${ENV_OPTS[@]}" \
   "${GH_OPTS[@]}" \
-  -v "$ROOT":"$ROOT":rw,nosuid,nodev,z \
+  -v "$ROOT":"$ROOT":"$WORKSPACE_MOUNT_OPTS" \
   -v "$UV_CACHE":/uv-cache:rw,nosuid,nodev,z \
   -v "$UV_PYTHON_DIR":/uv-python:rw,nosuid,nodev,z \
   -v "$VENV_DIR":/venv:rw,nosuid,nodev,Z \

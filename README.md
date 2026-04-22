@@ -46,7 +46,10 @@ sb uv run script.py             # one-shot command in the sandbox
 
 The wrappers:
 
-- mount the current repo (git root or `$PWD`) read-write at its real path
+- mount the current repo read-write at its real path. Agent wrappers
+  (`claude`, `codex`, `pi`) require a git repository by default; `sb` may use a
+  narrow non-git `$PWD`. All wrappers refuse broad roots such as `/` and
+  `$HOME`.
 - forward API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `TOGETHER_API_KEY`, …) and `gh` auth
 - mount Claude's host auth files (`~/.claude/.credentials.json`,
@@ -60,6 +63,10 @@ The wrappers:
   venvs, uv caches) under `$XDG_STATE_HOME/claude-podman/` and
   `$XDG_CACHE_HOME/claude-podman/` — survives container removal and image
   rebuilds
+- do not relabel the workspace mount by default; on SELinux hosts this may
+  fail closed with permission denied instead of changing host labels. Set
+  `AISB_RELABEL_WORKSPACE=1` only for a narrow project directory that you
+  intentionally want Podman to relabel.
 
 ## Hardening
 
@@ -97,6 +104,15 @@ the sandbox with sensitive material:
   wrappers need the network for API calls and do not support this.
 - **The mounted repo is read-write.** An agent can modify files, commit, and
   (if `GH_TOKEN` or `gh` auth is present) push malicious commits upstream.
+- **SELinux relabeling is opt-in for the repo.** The wrappers still use
+  relabeling for wrapper-owned state/cache directories, but not for the
+  workspace mount unless `AISB_RELABEL_WORKSPACE=1` is set. If a previous run
+  accidentally relabeled `$HOME`, restore defaults with:
+
+  ```sh
+  restorecon -Rv -e "$HOME/.local/share/containers" "$HOME"
+  ```
+
 - **Agent-level safety is bypassed.** `--dangerously-skip-permissions` /
   `--dangerously-bypass-approvals-and-sandbox` delegate all behavioral
   boundaries to model alignment. If the model is jailbroken or
@@ -133,6 +149,9 @@ Per-wrapper overrides:
 | `CODEX_AUTH_WRITE=1`       | As above, for `run-codex` only.                                       |
 | `PI_AUTH_WRITE=1`          | As above, for `run-pi` only (no-op on auth but flips repo to ro).     |
 | `AISB_AUTH_WRITE_KEEP_REPO_RW=1` | In auth-write mode, keep the repo writable.                     |
+| `AISB_ALLOW_NON_GIT_WORKSPACE=1` | Allow agent wrappers from a non-git `$PWD`.                    |
+| `AISB_ALLOW_DANGEROUS_ROOT=1` | Allow broad workspace roots like `$HOME` or `/` intentionally.     |
+| `AISB_RELABEL_WORKSPACE=1` | Add `:z` to the workspace mount for SELinux relabeling.               |
 | `AISB_MEMORY`              | `--memory` cap (default `8g`).                                        |
 | `AISB_CPUS`                | `--cpus` cap (default `4`).                                           |
 | `AISB_PIDS`                | `--pids-limit` cap (default `1024`).                                  |

@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared helpers for bin/run-{claude,codex,pi}. Sourced, not executed.
 #
 # Callers must set these before calling common_init:
@@ -33,9 +34,17 @@ common_init() {
   if git rev-parse --show-toplevel >/dev/null 2>&1; then
     ROOT="$(git rev-parse --show-toplevel)"
   else
+    if [[ "${AISB_ALLOW_NON_GIT_WORKSPACE:-0}" != "1" ]]; then
+      echo "Error: ${TOOL} must be run from inside a git repository." >&2
+      echo >&2
+      echo "Agent wrappers mount the workspace read-write; refusing non-git parent directories." >&2
+      echo "Run from a project repository, or set AISB_ALLOW_NON_GIT_WORKSPACE=1 intentionally." >&2
+      exit 1
+    fi
     ROOT="$PWD"
   fi
   ROOT="$(realpath "$ROOT")"
+  common_check_workspace_root "$ROOT"
 
   BASE="$(basename "$ROOT")"
   BASE="${BASE//[^A-Za-z0-9._-]/_}"
@@ -83,6 +92,12 @@ common_init() {
     REPO_MODE="rw"
   fi
 
+  WORKSPACE_MOUNT_OPTS="${REPO_MODE},nosuid,nodev"
+  if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
+    WORKSPACE_MOUNT_OPTS+=",z"
+    echo "${TOOL}: workspace SELinux relabel enabled for $ROOT" >&2
+  fi
+
   : "${AISB_MEMORY:=8g}"
   : "${AISB_CPUS:=4}"
   : "${AISB_PIDS:=1024}"
@@ -125,7 +140,7 @@ common_init() {
     -e "UV_PYTHON_INSTALL_DIR=/aisb-${TOOL}/uv-python"
     -e "UV_PROJECT_ENVIRONMENT=/aisb-${TOOL}/venv"
     -e "PYTEST_ADDOPTS=${PYTEST_ADDOPTS:-} -o cache_dir=/aisb-${TOOL}/pytest"
-    -v "${ROOT}:${ROOT}:${REPO_MODE},nosuid,nodev,z"
+    -v "${ROOT}:${ROOT}:${WORKSPACE_MOUNT_OPTS}"
     -v "${WORKSPACE_CACHE_DIR}:/aisb-${TOOL}/cache:rw,nosuid,nodev,z"
     -v "${WORKSPACE_STATE_DIR}:/aisb-${TOOL}/state:rw,nosuid,nodev,z"
     -v "${WORKSPACE_UV_CACHE_DIR}:/aisb-${TOOL}/uv-cache:rw,nosuid,nodev,z"
@@ -138,6 +153,48 @@ common_init() {
   _common_append_tty
   _common_append_gh
   _common_append_seccomp
+}
+
+common_die_dangerous_root() {
+  local root="$1"
+  echo "Error: refusing to run ${TOOL} with dangerous workspace root: $root" >&2
+  echo >&2
+  echo "This wrapper bind-mounts the workspace into an agent container." >&2
+  echo "Run it from a project directory or git repository instead." >&2
+  echo "To override intentionally, set AISB_ALLOW_DANGEROUS_ROOT=1." >&2
+  exit 1
+}
+
+common_check_workspace_root() {
+  local root="$1"
+  local home_real xdg_data containers_real dangerous
+  dangerous=0
+
+  home_real="$(realpath "$HOME" 2>/dev/null || printf '%s' "$HOME")"
+  xdg_data="${XDG_DATA_HOME:-$HOME/.local/share}"
+  containers_real="$(realpath "$xdg_data/containers" 2>/dev/null || true)"
+
+  case "$root" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var|/Users)
+      dangerous=1
+      ;;
+  esac
+
+  if [[ "$root" == "$home_real" ]]; then
+    dangerous=1
+  fi
+
+  if [[ -n "$containers_real" && ( "$root" == "$containers_real" || "$root" == "$containers_real"/* ) ]]; then
+    dangerous=1
+  fi
+
+  if (( dangerous )); then
+    if [[ "${AISB_ALLOW_DANGEROUS_ROOT:-0}" == "1" ]]; then
+      echo "warn: AISB_ALLOW_DANGEROUS_ROOT=1; allowing workspace root '$root'" >&2
+      return 0
+    fi
+    common_die_dangerous_root "$root"
+  fi
 }
 
 _common_warn_memory() {
