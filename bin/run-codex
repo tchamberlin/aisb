@@ -28,25 +28,19 @@ common_check_image
 mkdir -p "$HOME/.codex"
 common_ensure_json_object_file "$HOME/.codex/auth.json" "Codex auth"
 touch "$HOME/.codex/config.toml"
+common_maybe_relabel_auth_file "$HOME/.codex/auth.json" "Codex auth"
+common_maybe_relabel_auth_file "$HOME/.codex/config.toml" "Codex config"
 
 CODEX_DIR="${STATE_BASE}/codex/${HASH}/dot-codex"
-CODEX_HOST_DIR="${STATE_BASE}/codex/${HASH}/host-codex"
-mkdir -p "$CODEX_DIR" "$CODEX_HOST_DIR"
-CODEX_AUTH_STAGE="${CODEX_HOST_DIR}/auth.json"
-CODEX_CONFIG_STAGE="${CODEX_HOST_DIR}/config.toml"
-cp -p "$HOME/.codex/auth.json" "$CODEX_AUTH_STAGE"
-cp -p "$HOME/.codex/config.toml" "$CODEX_CONFIG_STAGE"
-common_ensure_json_object_file "$CODEX_AUTH_STAGE" "Codex staged auth"
+mkdir -p "$CODEX_DIR"
 
 common_require_mount_path "$CODEX_DIR" "Codex state source path"
 common_require_mount_path "${USER_HOME}/.codex" "Codex state destination path"
-common_require_mount_path "$CODEX_AUTH_STAGE" "Codex staged auth source path"
-common_require_mount_path "$CODEX_CONFIG_STAGE" "Codex staged config source path"
 
 TOOL_MOUNTS=(
   -v "${CODEX_DIR}:${USER_HOME}/.codex:rw,nosuid,nodev,noexec,z"
-  -v "${CODEX_AUTH_STAGE}:${USER_HOME}/.codex/auth.json:${AUTH_MODE},nosuid,nodev,noexec,z"
-  -v "${CODEX_CONFIG_STAGE}:${USER_HOME}/.codex/config.toml:${AUTH_MODE},nosuid,nodev,noexec,z"
+  -v "${HOME}/.codex/auth.json:${USER_HOME}/.codex/auth.json:${AUTH_MODE},nosuid,nodev,noexec"
+  -v "${HOME}/.codex/config.toml:${USER_HOME}/.codex/config.toml:${AUTH_MODE},nosuid,nodev,noexec"
 )
 
 # Container IS the sandbox, so bypass codex's internal one unless opted out.
@@ -62,7 +56,7 @@ fi
 
 codex_auth_is_empty() {
   local compact
-  compact="$(tr -d '[:space:]' < "$CODEX_AUTH_STAGE")"
+  compact="$(tr -d '[:space:]' < "$HOME/.codex/auth.json")"
   [[ -z "$compact" || "$compact" == "{}" ]]
 }
 
@@ -80,8 +74,8 @@ codex_command_allows_unauth() {
 
 if [[ "${AISB_QUIET:-0}" != "1" ]]; then
   echo "[aisb:codex] codex state: $CODEX_DIR" >&2
-  echo "[aisb:codex] codex auth: $HOME/.codex/auth.json -> $CODEX_AUTH_STAGE -> ${USER_HOME}/.codex/auth.json ($AUTH_MODE)" >&2
-  echo "[aisb:codex] codex config: $HOME/.codex/config.toml -> $CODEX_CONFIG_STAGE -> ${USER_HOME}/.codex/config.toml ($AUTH_MODE)" >&2
+  echo "[aisb:codex] codex auth: $HOME/.codex/auth.json -> ${USER_HOME}/.codex/auth.json ($AUTH_MODE)" >&2
+  echo "[aisb:codex] codex config: $HOME/.codex/config.toml -> ${USER_HOME}/.codex/config.toml ($AUTH_MODE)" >&2
   if [[ -n "${OPENAI_API_KEY:-}" ]]; then
     echo "[aisb:codex] codex env: forwarding OPENAI_API_KEY" >&2
   else
@@ -104,16 +98,6 @@ if [[ -z "${OPENAI_API_KEY:-}" ]] && codex_auth_is_empty && ! codex_command_allo
   exit 1
 fi
 
-set +e
-podman run "${COMMON_PODMAN_ARGS[@]}" \
+exec podman run "${COMMON_PODMAN_ARGS[@]}" \
   "${OPENAI_OPTS[@]}" "${TOOL_MOUNTS[@]}" \
   "$IMAGE" "${CODEX_FLAGS[@]}" "$@"
-status=$?
-set -e
-
-if [[ "$AUTH_MODE" == "rw" ]]; then
-  cp -p "$CODEX_AUTH_STAGE" "$HOME/.codex/auth.json"
-  cp -p "$CODEX_CONFIG_STAGE" "$HOME/.codex/config.toml"
-fi
-
-exit "$status"

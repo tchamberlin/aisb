@@ -56,10 +56,11 @@ The wrappers:
   `TOGETHER_API_KEY`, …) and `gh` auth
 - mount Claude's host auth files (`~/.claude/.credentials.json`,
   `~/.claude.json`) read-write for Claude Code compatibility, while keeping the
-  rest of Claude runtime state per-repo. Codex auth/config are staged into
-  wrapper-owned state and mounted **read-only** in normal runs; `gh` config is
-  also mounted **read-only**. To refresh tokens or run a first-time `login`, use
-  `AISB_AUTH_WRITE=1` (or wrapper-specific `CODEX_AUTH_WRITE=1`).
+  rest of Claude runtime state per-repo. Codex auth/config and `gh` config are
+  mounted **read-only** in normal runs. On SELinux hosts, wrappers ask before
+  relabeling the specific auth/config files needed for container access. To
+  refresh tokens or run a first-time `login`, use `AISB_AUTH_WRITE=1` (or
+  wrapper-specific `CODEX_AUTH_WRITE=1`).
   Auth-write mode also mounts the repo read-only to shrink blast radius — set
   `AISB_AUTH_WRITE_KEEP_REPO_RW=1` to override.
 - keep durable per-repo runtime state (Claude/Codex dotdirs, logs, sessions,
@@ -68,7 +69,7 @@ The wrappers:
   rebuilds
 - run tools with container-local homes (`/home/sb` for Claude, `/home/codex`
   for Codex). Host files still come from your own `$HOME`; startup logs show
-  how each auth/config file reaches the container.
+  the host path and the container destination for each auth/config mount.
 - mount a per-invocation `/tmp` from `$XDG_STATE_HOME/claude-podman/` so
   scratch data stays outside the repo without being capped by a small tmpfs.
   Old tmp dirs are pruned on later wrapper starts.
@@ -143,9 +144,11 @@ the sandbox with sensitive material:
   write, unlink, rename, or truncate operations while the repo mount is
   writable; those are required for ordinary editing workflows.
 - **SELinux relabeling is opt-in for the repo.** The wrappers still use
-  relabeling for wrapper-owned state/cache directories, but not for the
-  workspace mount unless `AISB_RELABEL_WORKSPACE=1` is set. If a previous run
-  accidentally relabeled `$HOME`, restore defaults with:
+  relabeling for wrapper-owned state/cache directories. They also ask before
+  relabeling individual auth/config files in `$HOME` unless
+  `AISB_RELABEL_AUTH=1` is set. The workspace mount is not relabeled unless
+  `AISB_RELABEL_WORKSPACE=1` is set. If a previous run accidentally relabeled
+  broader `$HOME` content, restore defaults with:
 
   ```sh
   restorecon -Rv -e "$HOME/.local/share/containers" "$HOME"
@@ -193,6 +196,7 @@ Per-wrapper overrides:
 | `AISB_WORKSPACE_READONLY=1` | Mount the workspace `ro,nosuid,nodev` for audit/review/exploration runs. |
 | `AISB_DEBUG=1`             | Include detailed mount/auth/hardening diagnostics in startup logs. |
 | `AISB_QUIET=1`             | Suppress wrapper startup summary logs.                            |
+| `AISB_RELABEL_AUTH=1`      | Allow wrappers to relabel specific auth/config files without prompting on SELinux hosts. |
 | `AISB_RELABEL_WORKSPACE=1` | Add `:z` to the workspace mount for SELinux relabeling.               |
 | `AISB_MEMORY`              | `--memory` cap (default `8g`).                                        |
 | `AISB_CPUS`                | `--cpus` cap (default `4`).                                           |

@@ -34,6 +34,8 @@ mkdir -p "$HOME/.claude"
 common_ensure_json_object_file "$HOME/.claude.json" "Claude host config"
 common_ensure_json_object_file "$HOME/.claude/.credentials.json" "Claude credentials"
 common_ensure_json_object_file "$HOME/.claude/settings.json" "Claude settings"
+common_maybe_relabel_auth_file "$HOME/.claude/.credentials.json" "Claude credentials"
+common_maybe_relabel_auth_file "$HOME/.claude/settings.json" "Claude settings"
 
 CLAUDE_DIR="${STATE_BASE}/claude/${HASH}/dot-claude"
 mkdir -p "$CLAUDE_DIR"

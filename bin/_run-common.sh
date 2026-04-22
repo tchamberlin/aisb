@@ -340,6 +340,63 @@ common_ensure_json_object_file() {
   fi
 }
 
+common_selinux_enabled() {
+  command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled
+}
+
+common_selinux_context() {
+  stat -c '%C' "$1" 2>/dev/null || true
+}
+
+common_selinux_context_is_container() {
+  local context="$1"
+  [[ "$context" == *:container_file_t:* || "$context" == *:container_ro_file_t:* ]]
+}
+
+common_maybe_relabel_auth_file() {
+  local path="$1"
+  local description="$2"
+  local context answer
+
+  common_selinux_enabled || return 0
+
+  context="$(common_selinux_context "$path")"
+  if common_selinux_context_is_container "$context"; then
+    return 0
+  fi
+
+  if [[ "${AISB_RELABEL_AUTH:-0}" == "1" ]]; then
+    chcon -t container_file_t "$path"
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    echo "Error: SELinux may prevent the container from reading $description: $path" >&2
+    echo "Current label: ${context:-unknown}" >&2
+    echo "Run this once, then retry:" >&2
+    echo "  chcon -t container_file_t '$path'" >&2
+    echo "Or rerun with AISB_RELABEL_AUTH=1 to allow this wrapper to relabel auth/config files." >&2
+    exit 1
+  fi
+
+  echo "SELinux may prevent the container from reading $description:" >&2
+  echo "  $path" >&2
+  echo "Current label: ${context:-unknown}" >&2
+  read -r -p "Relabel this file for container access with chcon -t container_file_t? [y/N] " answer
+  case "$answer" in
+    y|Y|yes|YES)
+      chcon -t container_file_t "$path"
+      ;;
+    *)
+      echo "Error: refusing to run until $description is readable by the container." >&2
+      echo "Run this once, then retry:" >&2
+      echo "  chcon -t container_file_t '$path'" >&2
+      echo "Or rerun with AISB_RELABEL_AUTH=1 to allow this wrapper to relabel auth/config files." >&2
+      exit 1
+      ;;
+  esac
+}
+
 common_check_workspace_bind_paths() {
   common_require_mount_path "$ROOT" "workspace source path"
   common_require_mount_path "$ROOT" "workspace destination path"
