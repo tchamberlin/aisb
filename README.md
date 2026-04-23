@@ -255,6 +255,14 @@ When a repo-specific base image is active:
   derived tool images and tags those images with the same repo-scoped names the
   wrappers expect.
 
+Derived tool images do not install missing base packages. A repo-specific base
+must provide the tool prerequisites itself, or the derived build fails early with
+a list of missing commands:
+
+- `claude`: `bash`, `curl`, `install`, `readlink`
+- `codex`: `npm`
+- `pi`: `npm`
+
 Build repo-specific tool images from inside the project repo, or point the build
 script at the project explicitly:
 
