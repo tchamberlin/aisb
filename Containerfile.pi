@@ -8,6 +8,7 @@ RUN /usr/local/bin/aisb-install-node-npm \
 ARG PI_VERSION=unknown
 RUN echo "pi-coding-agent version: ${PI_VERSION}" \
  && test "${PI_VERSION}" != "unknown" \
- && npm install -g "@mariozechner/pi-coding-agent@${PI_VERSION}"
+ && npm install -g "@mariozechner/pi-coding-agent@${PI_VERSION}" \
+ && rm -rf "$NPM_CONFIG_CACHE"
 
 ENTRYPOINT ["pi"]

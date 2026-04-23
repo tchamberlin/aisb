@@ -8,7 +8,8 @@ RUN /usr/local/bin/aisb-install-node-npm \
 ARG CODEX_VERSION=unknown
 RUN echo "codex version: ${CODEX_VERSION}" \
  && test "${CODEX_VERSION}" != "unknown" \
- && npm install -g "@openai/codex@${CODEX_VERSION}"
+ && npm install -g "@openai/codex@${CODEX_VERSION}" \
+ && rm -rf "$NPM_CONFIG_CACHE"
 
 # Codex runs as user "codex" with HOME=/home/codex.
 RUN mkdir -p /home/codex && chmod 0777 /home/codex

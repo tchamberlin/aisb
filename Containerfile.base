@@ -41,6 +41,7 @@ ENV HOME=/home/sb \
     UV_CACHE_DIR=/uv-cache \
     UV_TOOL_DIR=/uv-tools \
     UV_TOOL_BIN_DIR=/uv-bin \
+    NPM_CONFIG_CACHE=/tmp/npm-cache \
     PATH=/uv-bin:/home/sb/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 # Python tooling installed globally via uv tool: ruff (linter/formatter),
@@ -51,4 +52,5 @@ RUN uv tool install ruff \
  && uv tool install prek
 
 # Biome (JS/TS linter/formatter) installed globally via npm.
-RUN npm install -g @biomejs/biome
+RUN npm install -g @biomejs/biome \
+ && rm -rf "$NPM_CONFIG_CACHE"
