@@ -182,8 +182,32 @@ resolve_npm_version() {
   printf '%s' "$version"
 }
 
+image_label() {
+  local image="$1"
+  local label="$2"
+  podman image inspect --format "{{if .Config.Labels}}{{index .Config.Labels \"$label\"}}{{end}}" "$image" 2>/dev/null || true
+}
+
+managed_base_image_is_stale() {
+  local actual_recipe expected_recipe
+
+  if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && "$BASE_IMAGE_EXPLICIT" != "1" ]] \
+    && ! repo_base_is_local_containerfile; then
+    return 1
+  fi
+
+  if ! podman image exists "$BASE_IMAGE_TAG"; then
+    return 0
+  fi
+
+  actual_recipe="$(image_label "$BASE_IMAGE_TAG" "io.aisb.recipe_fingerprint")"
+  expected_recipe="$(aisb_expected_recipe_fingerprint "$REPO_ROOT" "$WORKSPACE_ROOT" base)"
+
+  [[ -z "$actual_recipe" || "$actual_recipe" != "$expected_recipe" ]]
+}
+
 ensure_base_image() {
-  if podman image exists "$BASE_IMAGE_TAG"; then
+  if podman image exists "$BASE_IMAGE_TAG" && ! managed_base_image_is_stale; then
     return 0
   fi
 
@@ -194,7 +218,11 @@ ensure_base_image() {
     return 1
   fi
 
-  echo "Base image '$BASE_IMAGE_TAG' not found; building it first."
+  if podman image exists "$BASE_IMAGE_TAG"; then
+    echo "Base image '$BASE_IMAGE_TAG' is stale; rebuilding it first."
+  else
+    echo "Base image '$BASE_IMAGE_TAG' not found; building it first."
+  fi
   build_one base
 }
 
@@ -214,11 +242,14 @@ build_one() {
   fi
 
   local -a flags=("${COMMON_FLAGS[@]}")
-  local tag
+  local tag recipe_fingerprint base_image_id build_flavor
+
+  build_flavor="$flavor"
 
   case "$flavor" in
     base)
       tag="$BASE_IMAGE_TAG"
+      build_flavor="base"
       if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && "$BASE_IMAGE_EXPLICIT" != "1" ]] \
         && ! repo_base_is_local_containerfile; then
         if ! podman image exists "$BASE_IMAGE_TAG"; then
@@ -241,6 +272,7 @@ build_one() {
       fi
       flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
       ensure_base_image
+      base_image_id="$(podman image inspect --format '{{.Id}}' "$BASE_IMAGE_TAG")"
       local claude_version
       claude_version="$(resolve_npm_version @anthropic-ai/claude-code)"
       echo "Latest Claude Code version: $claude_version"
@@ -254,6 +286,7 @@ build_one() {
       fi
       flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
       ensure_base_image
+      base_image_id="$(podman image inspect --format '{{.Id}}' "$BASE_IMAGE_TAG")"
       local codex_version
       codex_version="$(resolve_npm_version @openai/codex)"
       echo "Latest Codex version: $codex_version"
@@ -267,6 +300,7 @@ build_one() {
       fi
       flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
       ensure_base_image
+      base_image_id="$(podman image inspect --format '{{.Id}}' "$BASE_IMAGE_TAG")"
       local pi_version
       pi_version="$(resolve_npm_version @mariozechner/pi-coding-agent)"
       echo "Latest pi-coding-agent version: $pi_version"
@@ -277,6 +311,16 @@ build_one() {
       return 2
       ;;
   esac
+
+  recipe_fingerprint="$(aisb_expected_recipe_fingerprint "$REPO_ROOT" "$WORKSPACE_ROOT" "$build_flavor")"
+  flags+=(
+    --label "io.aisb.managed=true"
+    --label "io.aisb.flavor=$build_flavor"
+    --label "io.aisb.recipe_fingerprint=$recipe_fingerprint"
+  )
+  if [[ -n "${base_image_id:-}" ]]; then
+    flags+=(--label "io.aisb.base_image_id=$base_image_id")
+  fi
 
   echo "Building $tag from $containerfile"
   podman build \

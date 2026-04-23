@@ -154,6 +154,8 @@ if ! podman image exists "$IMAGE" 2>/dev/null; then
   exit 1
 fi
 
+common_maybe_prompt_rebuild_stale_image
+
 # Interactive only if stdin is a tty
 TTY_OPTS=(-i)
 if [[ -t 0 ]]; then

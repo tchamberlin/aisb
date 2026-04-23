@@ -10,6 +10,22 @@ aisb_sha1_10() {
   printf '%s' "$1" | { sha1sum 2>/dev/null || shasum -a 1; } | awk '{print $1}' | cut -c1-10
 }
 
+aisb_sha1() {
+  printf '%s' "$1" | { sha1sum 2>/dev/null || shasum -a 1; } | awk '{print $1}'
+}
+
+aisb_hash_files() {
+  local file digest=""
+  for file in "$@"; do
+    if [[ ! -f "$file" ]]; then
+      echo "error: fingerprint input file not found: $file" >&2
+      return 1
+    fi
+    digest+="$file"$'\t'"$({ sha1sum 2>/dev/null || shasum -a 1; } < "$file" | awk '{print $1}')"${IFS}
+  done
+  aisb_sha1 "$digest"
+}
+
 aisb_workspace_base() {
   local root="$1"
   local base
@@ -261,4 +277,94 @@ aisb_build_command_hint() {
   local root="$2"
   local flavor="$3"
   printf 'AISB_WORKSPACE=%q %q %q\n' "$root" "$script_dir/build-containers" "$flavor"
+}
+
+aisb_expected_recipe_fingerprint() {
+  local aisb_root="$1"
+  local workspace_root="$2"
+  local tool="$3"
+
+  case "$tool" in
+    sb|base)
+      if aisb_repo_base_is_local_containerfile; then
+        aisb_hash_files "$workspace_root/Containerfile"
+      else
+        aisb_hash_files \
+          "$aisb_root/Containerfile.base" \
+          "$aisb_root/container/install-agent-python-tools.sh" \
+          "$aisb_root/container/install-node-npm.sh"
+      fi
+      ;;
+    claude)
+      aisb_hash_files \
+        "$aisb_root/Containerfile.claude" \
+        "$aisb_root/container/install-agent-python-tools.sh" \
+        "$aisb_root/container/install-agent-runtime-deps.sh"
+      ;;
+    codex)
+      aisb_hash_files \
+        "$aisb_root/Containerfile.codex" \
+        "$aisb_root/container/install-agent-python-tools.sh" \
+        "$aisb_root/container/install-agent-runtime-deps.sh" \
+        "$aisb_root/container/install-node-npm.sh"
+      ;;
+    pi)
+      aisb_hash_files \
+        "$aisb_root/Containerfile.pi" \
+        "$aisb_root/container/install-agent-python-tools.sh" \
+        "$aisb_root/container/install-agent-runtime-deps.sh" \
+        "$aisb_root/container/install-node-npm.sh"
+      ;;
+    *)
+      echo "error: unknown tool '$tool' for recipe fingerprint" >&2
+      return 2
+      ;;
+  esac
+}
+
+aisb_managed_image_build_flavor() {
+  case "$1" in
+    sb)     printf '%s\n' "base" ;;
+    claude) printf '%s\n' "claude" ;;
+    codex)  printf '%s\n' "codex" ;;
+    pi)     printf '%s\n' "pi" ;;
+    *)
+      echo "error: unknown tool '$1'" >&2
+      return 2
+      ;;
+  esac
+}
+
+aisb_tool_uses_managed_image() {
+  local tool="$1"
+  local env_var
+
+  env_var="$(aisb_tool_image_env_var "$tool")"
+  if [[ -n "${!env_var:-}" ]]; then
+    return 1
+  fi
+
+  if [[ "$tool" == "sb" ]]; then
+    [[ -z "${AISB_REPO_BASE_IMAGE:-}" ]] || aisb_repo_base_is_local_containerfile
+    return
+  fi
+
+  return 0
+}
+
+aisb_expected_base_image_for_tool() {
+  local tool="$1"
+
+  case "$tool" in
+    claude|codex|pi)
+      if [[ -n "${AISB_REPO_BASE_IMAGE:-}" ]]; then
+        printf '%s\n' "$AISB_REPO_BASE_IMAGE"
+      else
+        printf '%s\n' "localhost/aisb-base:latest"
+      fi
+      ;;
+    *)
+      return 0
+      ;;
+  esac
 }

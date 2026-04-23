@@ -122,6 +122,7 @@ findutils
 coreutils
 procps
 iproute
+prek
 ```
 
 Package names vary by distro family. The script owns that mapping.

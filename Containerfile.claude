@@ -2,8 +2,10 @@ ARG BASE_IMAGE=localhost/aisb-base:latest
 FROM ${BASE_IMAGE}
 
 COPY --chmod=0755 container/install-agent-runtime-deps.sh /usr/local/bin/aisb-install-agent-runtime-deps
+COPY --chmod=0755 container/install-agent-python-tools.sh /usr/local/bin/aisb-install-agent-python-tools
 RUN /usr/local/bin/aisb-install-agent-runtime-deps \
- && rm /usr/local/bin/aisb-install-agent-runtime-deps
+ && /usr/local/bin/aisb-install-agent-python-tools prek \
+ && rm /usr/local/bin/aisb-install-agent-runtime-deps /usr/local/bin/aisb-install-agent-python-tools
 
 ARG CLAUDE_VERSION=unknown
 # Claude is installed via the upstream curl|bash installer. Accepted as

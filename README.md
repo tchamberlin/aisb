@@ -255,7 +255,9 @@ When a repo-specific base image is active:
 Derived tool images install a shared agent toolbox on top of the repo base,
 without changing the repo base image itself. The `codex` and `pi` images also
 install Node.js/npm in their own image before installing their CLI packages.
-This requires the repo base to have one supported package manager: `microdnf`,
+The shared toolbox includes `prek`, installed to `/usr/local/bin` so it remains
+available even when wrappers mount runtime tmpfs paths such as `/uv-bin`. This
+requires the repo base to have one supported package manager: `microdnf`,
 `dnf`, `apt-get`, or `apk`.
 
 Build smoke-test checklist for repo-derived images:
@@ -278,6 +280,11 @@ AISB_WORKSPACE=/path/to/project /path/to/aisb/bin/build-containers all
 Explicit environment overrides keep precedence: `SB_IMAGE`, `CLAUDE_IMAGE`,
 `CODEX_IMAGE`, and `PI_IMAGE` override wrapper selection; `BASE_IMAGE` overrides
 the base image used by `bin/build-containers`.
+
+For AISB-managed images, the wrappers compare the current build recipe against
+image metadata from the last build. In interactive runs, if the image looks
+older than the current AISB code or repo `Containerfile`, AISB prompts to
+rebuild it before continuing. In non-interactive runs, it warns and keeps going.
 
 [podman]: https://podman.io
 [direnv]: https://direnv.net

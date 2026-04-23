@@ -4,10 +4,12 @@ FROM ${BASE_IMAGE}
 ENV NPM_CONFIG_CACHE=/tmp/npm-cache
 
 COPY --chmod=0755 container/install-agent-runtime-deps.sh /usr/local/bin/aisb-install-agent-runtime-deps
+COPY --chmod=0755 container/install-agent-python-tools.sh /usr/local/bin/aisb-install-agent-python-tools
 COPY --chmod=0755 container/install-node-npm.sh /usr/local/bin/aisb-install-node-npm
 RUN /usr/local/bin/aisb-install-agent-runtime-deps \
+ && /usr/local/bin/aisb-install-agent-python-tools prek \
  && /usr/local/bin/aisb-install-node-npm \
- && rm /usr/local/bin/aisb-install-agent-runtime-deps /usr/local/bin/aisb-install-node-npm
+ && rm /usr/local/bin/aisb-install-agent-runtime-deps /usr/local/bin/aisb-install-agent-python-tools /usr/local/bin/aisb-install-node-npm
 
 ARG PI_VERSION=unknown
 RUN echo "pi-coding-agent version: ${PI_VERSION}" \
