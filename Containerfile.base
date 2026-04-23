@@ -23,9 +23,10 @@ RUN microdnf install -y --setopt=install_weak_deps=0 \
 
 # Node.js 24 LTS (official tarball, distro-independent). Verify sha256 against
 # the published SHASUMS256.txt; fail the build on tamper.
+COPY --chmod=0755 container/install-download-tools.sh /usr/local/bin/aisb-install-download-tools
 COPY --chmod=0755 container/install-node-npm.sh /usr/local/bin/aisb-install-node-npm
 RUN /usr/local/bin/aisb-install-node-npm \
- && rm /usr/local/bin/aisb-install-node-npm
+ && rm /usr/local/bin/aisb-install-node-npm /usr/local/bin/aisb-install-download-tools
 
 # uv (Astral) system-wide. Upstream installer is accepted as standard for
 # this vendor (curl | sh); the installer itself pins and verifies the binary.

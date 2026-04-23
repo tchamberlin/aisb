@@ -1,6 +1,10 @@
 ARG BASE_IMAGE=localhost/aisb-base:latest
 FROM ${BASE_IMAGE}
 
+COPY --chmod=0755 container/install-download-tools.sh /usr/local/bin/aisb-install-download-tools
+RUN /usr/local/bin/aisb-install-download-tools \
+ && rm /usr/local/bin/aisb-install-download-tools
+
 ARG CLAUDE_VERSION=unknown
 # Claude is installed via the upstream curl|bash installer. Accepted as
 # standard practice for this vendor; pinning is left to CLAUDE_VERSION as a

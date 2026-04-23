@@ -1,9 +1,10 @@
 ARG BASE_IMAGE=localhost/aisb-base:latest
 FROM ${BASE_IMAGE}
 
+COPY --chmod=0755 container/install-download-tools.sh /usr/local/bin/aisb-install-download-tools
 COPY --chmod=0755 container/install-node-npm.sh /usr/local/bin/aisb-install-node-npm
 RUN /usr/local/bin/aisb-install-node-npm \
- && rm /usr/local/bin/aisb-install-node-npm
+ && rm /usr/local/bin/aisb-install-node-npm /usr/local/bin/aisb-install-download-tools
 
 ARG CODEX_VERSION=unknown
 RUN echo "codex version: ${CODEX_VERSION}" \
