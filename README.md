@@ -250,16 +250,11 @@ When a repo-specific base image is active:
   derived tool images and tags those images with the same repo-scoped names the
   wrappers expect.
 
-Derived tool images do not install missing base packages. A repo-specific base
-must provide the tool prerequisites itself, or the derived build fails early with
-a list of missing commands:
-
-- `claude`: `bash`, `curl`, `install`, `readlink`
-- `codex`: `npm`
-
-The `pi` image bootstraps its own Node.js runtime and `pi-coding-agent` package
-in a builder stage, then copies only those runtime artifacts into the final
-repo-derived image.
+Derived tool images install a shared agent toolbox on top of the repo base,
+without changing the repo base image itself. The `codex` and `pi` images also
+install Node.js/npm in their own image before installing their CLI packages.
+This requires the repo base to have one supported package manager: `microdnf`,
+`dnf`, `apt-get`, or `apk`.
 
 Build repo-specific tool images from inside the project repo, or point the build
 script at the project explicitly:
