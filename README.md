@@ -256,7 +256,10 @@ a list of missing commands:
 
 - `claude`: `bash`, `curl`, `install`, `readlink`
 - `codex`: `npm`
-- `pi`: `npm`
+
+The `pi` image bootstraps its own Node.js runtime and `pi-coding-agent` package
+in a builder stage, then copies only those runtime artifacts into the final
+repo-derived image.
 
 Build repo-specific tool images from inside the project repo, or point the build
 script at the project explicitly:

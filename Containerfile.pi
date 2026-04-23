@@ -1,14 +1,30 @@
 ARG BASE_IMAGE=localhost/aisb-base:latest
-FROM ${BASE_IMAGE}
+FROM registry.fedoraproject.org/fedora-minimal@sha256:af9f254d2644fc392ed1948d7d1d72a27aef1166813863893404556b5be956fb AS pi-builder
 
-COPY --chmod=0755 container/check-tool-prereqs.sh /usr/local/bin/aisb-check-tool-prereqs
-RUN /usr/local/bin/aisb-check-tool-prereqs pi npm \
- && rm /usr/local/bin/aisb-check-tool-prereqs
+RUN microdnf install -y --setopt=install_weak_deps=0 \
+      ca-certificates curl coreutils tar xz \
+ && microdnf clean all \
+ && rm -rf /var/cache/dnf /var/cache/yum
+
+# Node.js 24 LTS, installed outside /usr/local so it can be copied into the
+# final image without changing the repo base's system paths.
+RUN curl -fsSLO https://nodejs.org/dist/v24.13.1/node-v24.13.1-linux-x64.tar.xz \
+ && echo '30215f90ea3cd04dfbc06e762c021393fa173a1d392974298bbc871a8e461089  node-v24.13.1-linux-x64.tar.xz' | sha256sum -c - \
+ && mkdir -p /opt/node \
+ && tar -xJ --strip-components=1 -C /opt/node -f node-v24.13.1-linux-x64.tar.xz \
+ && rm node-v24.13.1-linux-x64.tar.xz
 
 ARG PI_VERSION=unknown
 RUN echo "pi-coding-agent version: ${PI_VERSION}" \
  && test "${PI_VERSION}" != "unknown" \
- && npm install -g "@mariozechner/pi-coding-agent@${PI_VERSION}" \
- && rm -rf "$NPM_CONFIG_CACHE"
+ && /opt/node/bin/npm install -g --prefix /opt/pi "@mariozechner/pi-coding-agent@${PI_VERSION}" \
+ && rm -rf /root/.npm /tmp/npm-cache
+
+FROM ${BASE_IMAGE}
+
+COPY --from=pi-builder /opt/node /opt/node
+COPY --from=pi-builder /opt/pi /opt/pi
+
+ENV PATH=/opt/pi/bin:/opt/node/bin:$PATH
 
 ENTRYPOINT ["pi"]
