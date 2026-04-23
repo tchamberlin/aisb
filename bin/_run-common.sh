@@ -355,7 +355,6 @@ common_selinux_context_is_container() {
   [[ "$context" == *:container_file_t:* || "$context" == *:container_ro_file_t:* ]]
 }
 
-
 common_maybe_repair_workspace_relabel() {
   local root="$1"
   local context answer
@@ -395,6 +394,7 @@ common_maybe_repair_workspace_relabel() {
       ;;
   esac
 }
+
 common_maybe_relabel_auth_file() {
   local path="$1"
   local description="$2"
@@ -529,7 +529,77 @@ common_check_image() {
     exit 1
   fi
 
+  common_maybe_prompt_rebuild_stale_image
   common_maybe_repair_workspace_relabel "$ROOT"
+}
+
+common_image_label() {
+  local image="$1"
+  local label="$2"
+  podman image inspect --format "{{if .Config.Labels}}{{index .Config.Labels \"$label\"}}{{end}}" "$image" 2>/dev/null || true
+}
+
+common_image_id() {
+  local image="$1"
+  podman image inspect --format '{{.Id}}' "$image" 2>/dev/null || true
+}
+
+common_maybe_prompt_rebuild_stale_image() {
+  local aisb_root expected_recipe actual_recipe actual_base_id expected_base_id
+  local build_flavor rebuild_cmd reason reply
+
+  if ! aisb_tool_uses_managed_image "$TOOL"; then
+    return 0
+  fi
+
+  aisb_root="$(dirname "$_AISB_COMMON_DIR")"
+  actual_recipe="$(common_image_label "$IMAGE" "io.aisb.recipe_fingerprint")"
+  expected_recipe="$(aisb_expected_recipe_fingerprint "$aisb_root" "$ROOT" "$TOOL")"
+  reason=""
+
+  if [[ -z "$actual_recipe" ]]; then
+    reason="image predates AISB freshness metadata"
+  elif [[ "$actual_recipe" != "$expected_recipe" ]]; then
+    reason="AISB build recipe changed"
+  fi
+
+  expected_base_id=""
+  if [[ -z "$reason" && "$TOOL" != "sb" ]]; then
+    expected_base_id="$(aisb_expected_base_image_for_tool "$TOOL")"
+    if [[ -n "$expected_base_id" ]] && podman image exists "$expected_base_id" 2>/dev/null; then
+      expected_base_id="$(common_image_id "$expected_base_id")"
+      actual_base_id="$(common_image_label "$IMAGE" "io.aisb.base_image_id")"
+      if [[ -n "$actual_base_id" && -n "$expected_base_id" && "$actual_base_id" != "$expected_base_id" ]]; then
+        reason="base image changed"
+      fi
+    fi
+  fi
+
+  [[ -n "$reason" ]] || return 0
+
+  build_flavor="$(aisb_managed_image_build_flavor "$TOOL")"
+  rebuild_cmd="$(aisb_build_command_hint "$_AISB_COMMON_DIR" "$ROOT" "$build_flavor")"
+
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    echo "warn: image '$IMAGE' may be stale: $reason" >&2
+    echo "warn: rebuild with: $rebuild_cmd" >&2
+    return 0
+  fi
+
+  echo "Image '$IMAGE' may be stale: $reason" >&2
+  printf 'Rebuild it now with `%s`? [y/N] ' "$rebuild_cmd" >&2
+  read -r reply || reply=""
+  case "$reply" in
+    y|Y|yes|Yes|YES)
+      if ! eval "$rebuild_cmd"; then
+        echo "Error: rebuild failed; refusing to continue with stale image '$IMAGE'" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      echo "Continuing with existing image: $IMAGE" >&2
+      ;;
+  esac
 }
 
 _common_append_gh() {
