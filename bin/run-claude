@@ -18,32 +18,24 @@ common_init
 
 common_require_mount_path "$HOME/.claude.json" "Claude host config source path"
 common_require_mount_path "${USER_HOME}/.claude.json" "Claude host config destination path"
-common_require_mount_path "$HOME/.claude/settings.json" "Claude settings source path"
-common_require_mount_path "${USER_HOME}/.claude/settings.json" "Claude settings destination path"
-common_require_mount_path "$HOME/.claude/.credentials.json" "Claude credentials source path"
-common_require_mount_path "${USER_HOME}/.claude/.credentials.json" "Claude credentials destination path"
+common_require_mount_path "$HOME/.claude" "Claude config source path"
+common_require_mount_path "${USER_HOME}/.claude" "Claude config destination path"
 
 common_check_image
 
-# Ensure host-side files exist. .credentials.json is bind-mounted rw so OAuth
-# token rotation persists to the host; settings.json is also bind-mounted rw
-# because Claude Code persists startup acknowledgements there. .claude.json and
-# the rest of .claude are snapshotted per-repo below to contain prompt-injected
-# config mutations.
+# Ensure host-side files exist. Claude's config directory is mounted rw so its
+# atomic credential/settings writes persist normally.
 mkdir -p "$HOME/.claude"
 common_ensure_json_object_file "$HOME/.claude.json" "Claude host config"
 common_ensure_json_object_file "$HOME/.claude/.credentials.json" "Claude credentials"
 common_ensure_json_object_file "$HOME/.claude/settings.json" "Claude settings"
+common_maybe_relabel_auth_file "$HOME/.claude" "Claude config directory"
 common_maybe_relabel_auth_file "$HOME/.claude/.credentials.json" "Claude credentials"
 common_maybe_relabel_auth_file "$HOME/.claude/settings.json" "Claude settings"
 
 CLAUDE_DIR="${STATE_BASE}/claude/${HASH}/dot-claude"
 mkdir -p "$CLAUDE_DIR"
-# Placeholder target for the settings.json file bind-mount below.
-common_ensure_json_object_file "$CLAUDE_DIR/settings.json" "Claude repo settings placeholder"
 
-common_require_mount_path "$CLAUDE_DIR" "Claude state source path"
-common_require_mount_path "${USER_HOME}/.claude" "Claude state destination path"
 common_require_mount_path "${CLAUDE_DIR}/claude.json" "Claude repo config source path"
 
 # Seed per-repo .claude.json from host on first run, else create an empty
@@ -58,10 +50,8 @@ fi
 common_ensure_json_object_file "$CLAUDE_DIR/claude.json" "Claude repo config"
 
 TOOL_MOUNTS=(
-  -v "${CLAUDE_DIR}:${USER_HOME}/.claude:rw,nosuid,nodev,noexec,z"
+  -v "${HOME}/.claude:${USER_HOME}/.claude:rw,nosuid,nodev,noexec"
   -v "${CLAUDE_DIR}/claude.json:${USER_HOME}/.claude.json:rw,nosuid,nodev,noexec,z"
-  -v "${HOME}/.claude/settings.json:${USER_HOME}/.claude/settings.json:rw,nosuid,nodev,noexec"
-  -v "${HOME}/.claude/.credentials.json:${USER_HOME}/.claude/.credentials.json:rw,nosuid,nodev,noexec"
 )
 
 CLAUDE_FLAGS=()
@@ -69,11 +59,23 @@ if [[ "${CLAUDE_SAFE_MODE:-0}" != "1" ]]; then
   CLAUDE_FLAGS+=(--dangerously-skip-permissions)
 fi
 
+CLAUDE_OPTS=()
+CLAUDE_FORWARDED_VARS=()
+for var in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; do
+  if [[ -n "${!var:-}" ]]; then
+    CLAUDE_OPTS+=(-e "${var}=${!var}")
+    CLAUDE_FORWARDED_VARS+=("$var")
+  fi
+done
+
 if [[ "${AISB_QUIET:-0}" != "1" ]]; then
-  echo "[aisb:claude] claude state: $CLAUDE_DIR" >&2
+  echo "[aisb:claude] claude config: $HOME/.claude -> ${USER_HOME}/.claude (rw)" >&2
   echo "[aisb:claude] claude host config: $HOME/.claude.json -> ${USER_HOME}/.claude.json (rw)" >&2
-  echo "[aisb:claude] claude credentials: $HOME/.claude/.credentials.json -> ${USER_HOME}/.claude/.credentials.json (rw)" >&2
-  echo "[aisb:claude] claude settings: $HOME/.claude/settings.json -> ${USER_HOME}/.claude/settings.json (rw)" >&2
+  if ((${#CLAUDE_FORWARDED_VARS[@]})); then
+    echo "[aisb:claude] claude env: forwarding ${CLAUDE_FORWARDED_VARS[*]}" >&2
+  else
+    echo "[aisb:claude] claude env: ANTHROPIC_API_KEY not set" >&2
+  fi
   if [[ "${CLAUDE_SAFE_MODE:-0}" == "1" ]]; then
     echo "[aisb:claude] claude permissions: native prompts enabled" >&2
   else
@@ -81,5 +83,5 @@ if [[ "${AISB_QUIET:-0}" != "1" ]]; then
   fi
 fi
 
-exec podman run "${COMMON_PODMAN_ARGS[@]}" "${TOOL_MOUNTS[@]}" \
+exec podman run "${COMMON_PODMAN_ARGS[@]}" "${CLAUDE_OPTS[@]}" "${TOOL_MOUNTS[@]}" \
   "$IMAGE" "${CLAUDE_FLAGS[@]}" "$@"

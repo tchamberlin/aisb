@@ -56,16 +56,12 @@ The wrappers:
   where the agent should not mutate the repo.
 - forward API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `TOGETHER_API_KEY`, …) and `gh` auth
-- mount Claude's host auth/settings files (`~/.claude/.credentials.json`,
-  `~/.claude/settings.json`, `~/.claude.json`) read-write for Claude Code
-  compatibility, while keeping the rest of Claude runtime state per-repo. Codex
-  auth/config and `gh` config are mounted **read-only** in normal runs. On
-  SELinux hosts, wrappers ask before relabeling the specific auth/config files
-  needed for container access. To refresh tokens or run a first-time `login`,
-  use `AISB_AUTH_WRITE=1` (or wrapper-specific `CODEX_AUTH_WRITE=1`).
-  Auth-write mode also mounts the repo read-only to shrink blast radius — set
-  `AISB_AUTH_WRITE_KEEP_REPO_RW=1` to override.
-- keep durable per-repo runtime state (Claude/Codex dotdirs, logs, sessions,
+- mount Claude's host config directory (`~/.claude`) and Codex's host config
+  directory (`~/.codex`) read-write so login, token refresh, and atomic config
+  writes persist normally. `~/.claude.json` remains repo-scoped. `gh` config is
+  mounted **read-only** in normal runs. On SELinux hosts, wrappers ask before
+  relabeling the specific auth/config paths needed for container access.
+- keep durable per-repo runtime state (repo-scoped config, logs, sessions,
   venvs, uv caches) under `$XDG_STATE_HOME/claude-podman/` and
   `$XDG_CACHE_HOME/claude-podman/` — survives container removal and image
   rebuilds
@@ -148,7 +144,7 @@ the sandbox with sensitive material:
   writable; those are required for ordinary editing workflows.
 - **SELinux relabeling is opt-in for the repo.** The wrappers still use
   relabeling for wrapper-owned state/cache directories. They also ask before
-  relabeling individual auth/config files in `$HOME` unless
+  relabeling individual auth/config paths in `$HOME` unless
   `AISB_RELABEL_AUTH=1` is set. The workspace mount is not relabeled unless
   `AISB_RELABEL_WORKSPACE=1` is set. If a previous run accidentally relabeled
   broader `$HOME` content, restore defaults with:
@@ -162,11 +158,10 @@ the sandbox with sensitive material:
   boundaries to model alignment. If the model is jailbroken or
   prompt-injected, no in-container check will stop it.
 
-Claude auth/settings files are writable in normal runs because Claude Code may
-rewrite them during startup and persist acknowledgements there. Codex
-credentials and `gh` config remain read-only in normal runs (see
-`AISB_AUTH_WRITE=1` below for refresh mode). This does not prevent exfiltration
-of credentials that the current session can read.
+Claude and Codex config directories are writable in normal runs because the
+tools may rewrite credentials, settings, and acknowledgements during startup.
+`gh` config remains read-only in normal runs. This does not prevent
+exfiltration of credentials that the current session can read.
 
 ## Environment
 
@@ -189,10 +184,9 @@ Per-wrapper overrides:
 | `CODEX_SAFE_MODE=1`        | Keep Codex's built-in approvals + sandbox.                            |
 | `CLAUDE_NO_CACHE=1`        | Pass `--no-cache` to `podman build` (or use `bin/build-containers --no-cache`). |
 | `BASE_IMAGE`               | Override base image tag at build time.                                |
-| `AISB_AUTH_WRITE=1`        | Flip auth mounts to rw and repo to ro (for `login` / token refresh).  |
-| `CLAUDE_AUTH_WRITE=1`      | For `run-claude`, mount the repo ro while Claude auth stays writable. |
+| `AISB_AUTH_WRITE=1`        | Mount the repo read-only during auth-oriented runs.                   |
 | `CODEX_AUTH_WRITE=1`       | As above, for `run-codex` only.                                       |
-| `PI_AUTH_WRITE=1`          | As above, for `run-pi` only (no-op on auth but flips repo to ro).     |
+| `PI_AUTH_WRITE=1`          | As above, for `run-pi` only.                                         |
 | `AISB_AUTH_WRITE_KEEP_REPO_RW=1` | In auth-write mode, keep the repo writable.                     |
 | `AISB_ALLOW_NON_GIT_WORKSPACE=1` | Allow agent wrappers from a non-git `$PWD`.                    |
 | `AISB_ALLOW_DANGEROUS_ROOT=1` | Allow broad workspace roots like `$HOME` or `/` intentionally. Does not permit relabeling. |
@@ -200,7 +194,7 @@ Per-wrapper overrides:
 | `AISB_WORKSPACE_READONLY=1` | Mount the workspace `ro,nosuid,nodev` for audit/review/exploration runs. |
 | `AISB_DEBUG=1`             | Include detailed mount/auth/hardening diagnostics in startup logs. |
 | `AISB_QUIET=1`             | Suppress wrapper startup summary logs.                            |
-| `AISB_RELABEL_AUTH=1`      | Allow wrappers to relabel specific auth/config files without prompting on SELinux hosts. |
+| `AISB_RELABEL_AUTH=1`      | Allow wrappers to relabel specific auth/config paths without prompting on SELinux hosts. |
 | `AISB_RELABEL_WORKSPACE=1` | Add `:z` to the workspace mount for SELinux relabeling.               |
 | `AISB_MEMORY`              | `--memory` cap (default `8g`).                                        |
 | `AISB_CPUS`                | `--cpus` cap (default `4`).                                           |
@@ -212,7 +206,7 @@ Per-wrapper overrides:
 For a first-time Codex OAuth login, run:
 
 ```sh
-CODEX_AUTH_WRITE=1 codex login --device-auth
+codex login --device-auth
 ```
 
 ### Repo-specific base images
