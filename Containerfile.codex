@@ -1,6 +1,8 @@
 ARG BASE_IMAGE=localhost/aisb-base:latest
 FROM ${BASE_IMAGE}
 
+ENV NPM_CONFIG_CACHE=/tmp/npm-cache
+
 COPY --chmod=0755 container/install-agent-runtime-deps.sh /usr/local/bin/aisb-install-agent-runtime-deps
 COPY --chmod=0755 container/install-node-npm.sh /usr/local/bin/aisb-install-node-npm
 RUN /usr/local/bin/aisb-install-agent-runtime-deps \

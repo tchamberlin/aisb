@@ -11,10 +11,10 @@ fresh container; only the current repo and per-agent auth are mounted.
 | File                   | What it is                                                               |
 | ---------------------- | ------------------------------------------------------------------------ |
 | `Containerfile.base`   | Fedora-minimal base: coreutils, Node 24, uv, Python 3.14, build tools.   |
-| `Containerfile.claude` | `claude` CLI on top of base (`aisb-claude:latest`).                        |
-| `Containerfile.codex`  | OpenAI `codex` CLI on top of base (`aisb-codex:latest`).                   |
-| `Containerfile.pi`     | `pi-coding-agent` CLI on top of base (`aisb-pi:latest`).                   |
-| `bin/build-containers` | Build one or all images. Parallelizes the flavor builds.                 |
+| `Containerfile.claude` | Derived Claude image: repo image + shared agent toolbox + Claude.        |
+| `Containerfile.codex`  | Derived Codex image: repo image + shared agent toolbox + Node/npm + Codex. |
+| `Containerfile.pi`     | Derived PI image: repo image + shared agent toolbox + Node/npm + PI.     |
+| `bin/build-containers` | Build one or all images. Parallelizes derived image builds by default.    |
 | `bin/run-claude`       | Run Claude Code against the current repo.                                |
 | `bin/run-codex`        | Run Codex against the current repo.                                      |
 | `bin/run-pi`           | Run pi against the current repo.                                         |
@@ -29,6 +29,7 @@ fresh container; only the current repo and per-agent auth are mounted.
 ./install.sh                    # symlinks ~/.local/bin/{claude,codex,pi,sb}
 bin/build-containers all        # base + three flavors (parallel)
 bin/build-containers --no-cache # rebuild without the podman layer cache
+AISB_BUILD_SEQUENTIAL=1 bin/build-containers all
 ```
 
 Requires: `podman`, `bash`, `npm` (for version-pin lookups in `build-containers`).
@@ -183,6 +184,7 @@ Per-wrapper overrides:
 | `CLAUDE_SAFE_MODE=1`       | Keep Claude's built-in permission prompts.                            |
 | `CODEX_SAFE_MODE=1`        | Keep Codex's built-in approvals + sandbox.                            |
 | `CLAUDE_NO_CACHE=1`        | Pass `--no-cache` to `podman build` (or use `bin/build-containers --no-cache`). |
+| `AISB_BUILD_SEQUENTIAL=1`  | Build `claude`, `codex`, and `pi` sequentially for `bin/build-containers all`; useful for debugging constrained repo bases. |
 | `BASE_IMAGE`               | Override base image tag at build time.                                |
 | `AISB_AUTH_WRITE=1`        | Mount the repo read-only during auth-oriented runs.                   |
 | `CODEX_AUTH_WRITE=1`       | As above, for `run-codex` only.                                       |
@@ -255,6 +257,16 @@ without changing the repo base image itself. The `codex` and `pi` images also
 install Node.js/npm in their own image before installing their CLI packages.
 This requires the repo base to have one supported package manager: `microdnf`,
 `dnf`, `apt-get`, or `apk`.
+
+Build smoke-test checklist for repo-derived images:
+
+- default path with no repo `Containerfile`
+- Fedora or Fedora-minimal repo base using `microdnf`
+- Debian or Ubuntu repo base using `apt-get`
+- Alpine repo base using `apk`
+- unsupported repo base with no package manager; `claude`, `codex`, and `pi`
+  builds should fail with the supported package-manager message, while `sb`
+  can still run the repo image directly
 
 Build repo-specific tool images from inside the project repo, or point the build
 script at the project explicitly:

@@ -5,13 +5,15 @@ set -euo pipefail
 #   build-containers [--no-cache] [base|claude|codex|pi|all]
 #
 # Defaults to `all` when called with no argument. For `all`, the base is
-# built first and then the three flavor images build in parallel. Output
-# from parallel builds is prefixed with [flavor] so lines stay attributable.
+# built first and then the three flavor images build in parallel by default.
+# Output from parallel builds is prefixed with [flavor] so lines stay
+# attributable.
 #
 # Env vars:
-#   CLAUDE_NO_CACHE=1   pass --no-cache to podman build
-#   BASE_IMAGE          override base image tag (default: localhost/aisb-base:latest)
-#   AISB_WORKSPACE      workspace root to inspect for .aisb.env (default: cwd git root)
+#   CLAUDE_NO_CACHE=1       pass --no-cache to podman build
+#   AISB_BUILD_SEQUENTIAL=1 build claude/codex/pi sequentially for `all`
+#   BASE_IMAGE              override base image tag (default: localhost/aisb-base:latest)
+#   AISB_WORKSPACE          workspace root to inspect for .aisb.env (default: cwd git root)
 #
 # Each flavor's image tag matches what the run-* wrappers expect:
 #   base    -> localhost/aisb-base:latest, repo-provided AISB_BASE_IMAGE,
@@ -284,26 +286,45 @@ build_one() {
     "$build_context"
 }
 
+build_all_sequential() {
+  local f
+  for f in claude codex pi; do
+    build_one "$f"
+  done
+}
+
+build_all_parallel() {
+  local -a pids=()
+  local -a labels=()
+  local f fail i
+
+  for f in claude codex pi; do
+    (build_one "$f" 2>&1 | sed -u "s/^/[$f] /") &
+    pids+=($!)
+    labels+=("$f")
+  done
+
+  fail=0
+  for i in "${!pids[@]}"; do
+    if ! wait "${pids[$i]}"; then
+      echo "build failed: ${labels[$i]}" >&2
+      fail=$((fail + 1))
+    fi
+  done
+
+  if (( fail > 0 )); then
+    echo "$fail flavor build(s) failed" >&2
+    return 1
+  fi
+}
+
 case "$FLAVOR" in
   all)
     build_one base
-    pids=()
-    labels=()
-    for f in claude codex pi; do
-      (build_one "$f" 2>&1 | sed -u "s/^/[$f] /") &
-      pids+=($!)
-      labels+=("$f")
-    done
-    fail=0
-    for i in "${!pids[@]}"; do
-      if ! wait "${pids[$i]}"; then
-        echo "build failed: ${labels[$i]}" >&2
-        fail=$((fail + 1))
-      fi
-    done
-    if (( fail > 0 )); then
-      echo "$fail flavor build(s) failed" >&2
-      exit 1
+    if [[ "${AISB_BUILD_SEQUENTIAL:-0}" == "1" ]]; then
+      build_all_sequential
+    else
+      build_all_parallel
     fi
     ;;
   *)

@@ -186,6 +186,7 @@ common_init() {
     -e "TMPDIR=/tmp"
     -e "TMP=/tmp"
     -e "TEMP=/tmp"
+    -e "NPM_CONFIG_CACHE=/tmp/npm-cache"
     -e "XDG_CACHE_HOME=/aisb-${TOOL}/cache"
     -e "XDG_STATE_HOME=/aisb-${TOOL}/state"
     -e "UV_CACHE_DIR=/aisb-${TOOL}/uv-cache"

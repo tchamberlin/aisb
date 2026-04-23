@@ -37,5 +37,7 @@ elif command -v apk >/dev/null 2>&1; then
     procps iproute2
 else
   echo "error: no supported package manager found for agent runtime dependencies" >&2
+  echo "supported package managers: microdnf, dnf, apt-get, apk" >&2
+  echo "run-sb can still use the repo image directly; only derived agent images require this toolbox" >&2
   exit 127
 fi
