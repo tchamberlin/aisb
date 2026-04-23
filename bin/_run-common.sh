@@ -176,6 +176,7 @@ common_init() {
     --label "io.${TOOL}.repo_hash=$HASH"
     --label "io.${TOOL}.session=$STAMP-$$"
     -e "HOME=${USER_HOME}"
+    -e "PATH=${USER_HOME}/.local/bin:/uv-bin:/usr/local/bin:/usr/bin:/bin"
     -e "TERM=${TERM:-xterm-256color}"
     -e "COLORTERM=${COLORTERM:-truecolor}"
     -e "GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-$host_git_name}"

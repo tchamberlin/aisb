@@ -69,9 +69,10 @@ The wrappers:
   venvs, uv caches) under `$XDG_STATE_HOME/claude-podman/` and
   `$XDG_CACHE_HOME/claude-podman/` — survives container removal and image
   rebuilds
-- run tools with container-local homes (`/home/sb` for Claude, `/home/codex`
-  for Codex). Host files still come from your own `$HOME`; startup logs show
-  the host path and the container destination for each auth/config mount.
+- run tools with container-local homes (`/home/aisb-claude`,
+  `/home/aisb-codex`, `/home/aisb-pi`). Host files still come from your own
+  `$HOME`; startup logs show the host path and the container destination for
+  each auth/config mount.
 - mount a per-invocation `/tmp` from `$XDG_STATE_HOME/claude-podman/` so
   scratch data stays outside the repo without being capped by a small tmpfs.
   Old tmp dirs are pruned on later wrapper starts.
