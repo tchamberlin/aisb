@@ -355,6 +355,46 @@ common_selinux_context_is_container() {
   [[ "$context" == *:container_file_t:* || "$context" == *:container_ro_file_t:* ]]
 }
 
+
+common_maybe_repair_workspace_relabel() {
+  local root="$1"
+  local context answer
+
+  common_selinux_enabled || return 0
+  [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]] && return 0
+
+  context="$(common_selinux_context "$root")"
+  if ! common_selinux_context_is_container "$context"; then
+    return 0
+  fi
+
+  if ! command -v restorecon >/dev/null 2>&1; then
+    echo "warn: workspace root appears SELinux-relabeled for containers: $root" >&2
+    echo "warn: current label: ${context:-unknown}" >&2
+    echo "warn: install or run \`restorecon -Rv '$root'\` manually to restore host labels" >&2
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    echo "warn: workspace root appears SELinux-relabeled for containers: $root" >&2
+    echo "warn: current label: ${context:-unknown}" >&2
+    echo "warn: restore defaults with: restorecon -Rv '$root'" >&2
+    return 0
+  fi
+
+  echo "Workspace root appears SELinux-relabeled for container access:" >&2
+  echo "  $root" >&2
+  echo "Current label: ${context:-unknown}" >&2
+  read -r -p "Restore default labels now with restorecon -Rv? [y/N] " answer
+  case "$answer" in
+    y|Y|yes|YES)
+      restorecon -Rv "$root"
+      ;;
+    *)
+      echo "Continuing without restoring workspace labels." >&2
+      ;;
+  esac
+}
 common_maybe_relabel_auth_file() {
   local path="$1"
   local description="$2"
@@ -488,6 +528,8 @@ common_check_image() {
     echo "  $(aisb_build_command_hint "$_AISB_COMMON_DIR" "$ROOT" "$TOOL")" >&2
     exit 1
   fi
+
+  common_maybe_repair_workspace_relabel "$ROOT"
 }
 
 _common_append_gh() {
