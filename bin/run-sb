@@ -51,6 +51,11 @@ log_startup() {
   echo "[aisb:sb:debug] mount uv cache: $UV_CACHE -> /uv-cache (bind rw,nosuid,nodev)" >&2
   echo "[aisb:sb:debug] mount uv python: $UV_PYTHON_DIR -> /uv-python (bind rw,nosuid,nodev)" >&2
   echo "[aisb:sb:debug] mount venv: $VENV_DIR -> /venv (bind rw,nosuid,nodev)" >&2
+  if (( ${#REPO_VENV_MASK_OPTS[@]} > 0 )); then
+    echo "[aisb:sb:debug] mask repo .venv: $REPO_VENV_MASK_DIR -> $REPO_VENV_PATH (bind rw,nosuid,nodev)" >&2
+  else
+    echo "[aisb:sb:debug] mask repo .venv: not present" >&2
+  fi
 
   if [[ "${AISB_NO_NETWORK:-0}" == "1" ]]; then
     echo "[aisb:sb:debug] network: disabled" >&2
@@ -98,6 +103,9 @@ UV_CACHE="${CACHE_BASE}/uv/${HASH}"
 UV_PYTHON_DIR="${STATE_BASE}/uv-python/${HASH}"
 VENV_DIR="${STATE_BASE}/venvs/${HASH}/${STAMP}-$$"
 TMP_DIR="${STATE_BASE}/sb/${HASH}/tmp/${STAMP}-$$"
+REPO_VENV_PATH="${ROOT}/.venv"
+REPO_VENV_MASK_DIR="${STATE_BASE}/sb/${HASH}/repo-venv-masks/${STAMP}-$$"
+REPO_VENV_MASK_OPTS=()
 
 common_require_mount_path "$ROOT" "workspace source path"
 common_require_mount_path "$ROOT" "workspace destination path"
@@ -109,11 +117,31 @@ common_require_mount_path "$UV_PYTHON_DIR" "uv python source path"
 common_require_mount_path "/uv-python" "uv python destination path"
 common_require_mount_path "$VENV_DIR" "venv source path"
 common_require_mount_path "/venv" "venv destination path"
+common_require_mount_path "$REPO_VENV_PATH" "repo .venv destination path"
+common_require_mount_path "$REPO_VENV_MASK_DIR" "repo .venv mask source path"
 
-mkdir -p "$UV_CACHE" "$UV_PYTHON_DIR" "$VENV_DIR" "$TMP_DIR"
+if [[ -L "$REPO_VENV_PATH" ]]; then
+  echo "Error: refusing to run with symlinked repo .venv: $REPO_VENV_PATH" >&2
+  echo "The container cannot safely mask a symlinked .venv without risking access to the symlink target." >&2
+  exit 1
+fi
+
+if [[ -e "$REPO_VENV_PATH" && ! -d "$REPO_VENV_PATH" ]]; then
+  echo "Error: refusing to run with non-directory repo .venv: $REPO_VENV_PATH" >&2
+  exit 1
+fi
+
+if [[ -d "$REPO_VENV_PATH" ]]; then
+  REPO_VENV_MASK_OPTS=(
+    -v "${REPO_VENV_MASK_DIR}:${REPO_VENV_PATH}:rw,nosuid,nodev,Z"
+  )
+fi
+
+mkdir -p "$UV_CACHE" "$UV_PYTHON_DIR" "$VENV_DIR" "$TMP_DIR" "$REPO_VENV_MASK_DIR"
 chmod 1777 "$TMP_DIR"
 
 common_prune_old_dirs "${STATE_BASE}/venvs/${HASH}" "$STATE_BASE" -mtime +7
+common_prune_old_dirs "${STATE_BASE}/sb/${HASH}/repo-venv-masks" "$STATE_BASE" -mtime +7
 common_prune_old_dirs "${STATE_BASE}/sb/${HASH}/tmp" "$STATE_BASE" -mmin +1440
 
 # Forward common API keys + editor prefs
@@ -250,6 +278,7 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   "${ENV_OPTS[@]}" \
   "${GH_OPTS[@]}" \
   -v "$ROOT":"$ROOT":"$WORKSPACE_MOUNT_OPTS" \
+  "${REPO_VENV_MASK_OPTS[@]}" \
   -v "$TMP_DIR":/tmp:rw,nosuid,nodev,Z \
   -v "$UV_CACHE":/uv-cache:rw,nosuid,nodev,z \
   -v "$UV_PYTHON_DIR":/uv-python:rw,nosuid,nodev,z \

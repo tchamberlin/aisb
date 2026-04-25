@@ -66,6 +66,10 @@ The wrappers:
   venvs, uv caches) under `$XDG_STATE_HOME/claude-podman/` and
   `$XDG_CACHE_HOME/claude-podman/` — survives container removal and image
   rebuilds
+- mask an existing repo `.venv` directory with an empty per-run mount so the
+  container cannot read or mutate the host virtualenv. Python tooling should use
+  the wrapper-managed uv environment (`/aisb-<tool>/venv` for agents, `/venv`
+  for `sb`) instead.
 - run tools with container-local homes (`/home/aisb-claude`,
   `/home/aisb-codex`, `/home/aisb-pi`). Host files still come from your own
   `$HOME`; startup logs show the host path and the container destination for
@@ -118,6 +122,9 @@ The wrappers fail closed for several host-mutation hazards:
   Podman `-v` parsing would be ambiguous
 - `AISB_WORKSPACE_READONLY=1` mounts the workspace `ro,nosuid,nodev` for runs
   that should inspect rather than edit files
+- an existing repo `.venv` directory is hidden behind an empty per-run mount;
+  symlinked or non-directory `.venv` paths fail closed rather than entering the
+  container
 
 ### What this does not protect against
 

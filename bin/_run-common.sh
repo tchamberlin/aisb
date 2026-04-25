@@ -11,7 +11,7 @@
 #   CACHE_BASE, STATE_BASE
 #   WORKSPACE_CACHE_DIR, WORKSPACE_STATE_DIR, WORKSPACE_UV_CACHE_DIR,
 #   WORKSPACE_UV_PYTHON_DIR, WORKSPACE_VENV_DIR, WORKSPACE_PYTEST_CACHE_DIR,
-#   WORKSPACE_TMP_DIR
+#   WORKSPACE_TMP_DIR, WORKSPACE_REPO_VENV_PATH, WORKSPACE_REPO_VENV_MASK_DIR
 #   AUTH_MODE, REPO_MODE
 #   COMMON_PODMAN_ARGS (all shared podman flags: base hardening, tty, gh
 #                       auth passthrough, optional strict seccomp)
@@ -48,6 +48,11 @@ common_log_startup() {
   echo "[aisb:${TOOL}:debug] mount uv cache: $WORKSPACE_UV_CACHE_DIR -> /aisb-${TOOL}/uv-cache (bind rw,nosuid,nodev)" >&2
   echo "[aisb:${TOOL}:debug] mount uv python: $WORKSPACE_UV_PYTHON_DIR -> /aisb-${TOOL}/uv-python (bind rw,nosuid,nodev)" >&2
   echo "[aisb:${TOOL}:debug] mount venv: $WORKSPACE_VENV_DIR -> /aisb-${TOOL}/venv (bind rw,nosuid,nodev)" >&2
+  if (( ${#WORKSPACE_REPO_VENV_MASK_ARGS[@]} > 0 )); then
+    echo "[aisb:${TOOL}:debug] mask repo .venv: $WORKSPACE_REPO_VENV_MASK_DIR -> $WORKSPACE_REPO_VENV_PATH (bind rw,nosuid,nodev)" >&2
+  else
+    echo "[aisb:${TOOL}:debug] mask repo .venv: not present" >&2
+  fi
   echo "[aisb:${TOOL}:debug] mount pytest cache: $WORKSPACE_PYTEST_CACHE_DIR -> /aisb-${TOOL}/pytest (bind rw,nosuid,nodev)" >&2
 
   if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
@@ -107,8 +112,12 @@ common_init() {
   WORKSPACE_VENV_DIR="${STATE_BASE}/${TOOL}/${HASH}/venvs/${STAMP}-$$"
   WORKSPACE_PYTEST_CACHE_DIR="${STATE_BASE}/${TOOL}/${HASH}/pytest"
   WORKSPACE_TMP_DIR="${STATE_BASE}/${TOOL}/${HASH}/tmp/${STAMP}-$$"
+  WORKSPACE_REPO_VENV_PATH="${ROOT}/.venv"
+  WORKSPACE_REPO_VENV_MASK_DIR="${STATE_BASE}/${TOOL}/${HASH}/repo-venv-masks/${STAMP}-$$"
+  WORKSPACE_REPO_VENV_MASK_ARGS=()
 
   common_check_workspace_bind_paths
+  common_setup_workspace_venv_mask
 
   mkdir -p \
     "$WORKSPACE_CACHE_DIR" \
@@ -117,10 +126,12 @@ common_init() {
     "$WORKSPACE_UV_PYTHON_DIR" \
     "$WORKSPACE_VENV_DIR" \
     "$WORKSPACE_PYTEST_CACHE_DIR" \
-    "$WORKSPACE_TMP_DIR"
+    "$WORKSPACE_TMP_DIR" \
+    "$WORKSPACE_REPO_VENV_MASK_DIR"
   chmod 1777 "$WORKSPACE_TMP_DIR"
 
   common_prune_old_dirs "${STATE_BASE}/${TOOL}/${HASH}/venvs" "$STATE_BASE" -mtime +7
+  common_prune_old_dirs "${STATE_BASE}/${TOOL}/${HASH}/repo-venv-masks" "$STATE_BASE" -mtime +7
   common_prune_old_dirs "${STATE_BASE}/${TOOL}/${HASH}/tmp" "$STATE_BASE" -mmin +1440
 
   local tool_upper tool_auth_var
@@ -194,6 +205,7 @@ common_init() {
     -e "UV_PROJECT_ENVIRONMENT=/aisb-${TOOL}/venv"
     -e "PYTEST_ADDOPTS=${PYTEST_ADDOPTS:-} -o cache_dir=/aisb-${TOOL}/pytest"
     -v "${ROOT}:${ROOT}:${WORKSPACE_MOUNT_OPTS}"
+    "${WORKSPACE_REPO_VENV_MASK_ARGS[@]}"
     -v "${WORKSPACE_TMP_DIR}:/tmp:rw,nosuid,nodev,Z"
     -v "${WORKSPACE_CACHE_DIR}:/aisb-${TOOL}/cache:rw,nosuid,nodev,z"
     -v "${WORKSPACE_STATE_DIR}:/aisb-${TOOL}/state:rw,nosuid,nodev,z"
@@ -328,6 +340,27 @@ common_require_mount_path() {
   fi
 }
 
+common_setup_workspace_venv_mask() {
+  WORKSPACE_REPO_VENV_MASK_ARGS=()
+
+  if [[ -L "$WORKSPACE_REPO_VENV_PATH" ]]; then
+    echo "Error: refusing to run with symlinked repo .venv: $WORKSPACE_REPO_VENV_PATH" >&2
+    echo "The container cannot safely mask a symlinked .venv without risking access to the symlink target." >&2
+    exit 1
+  fi
+
+  if [[ -e "$WORKSPACE_REPO_VENV_PATH" && ! -d "$WORKSPACE_REPO_VENV_PATH" ]]; then
+    echo "Error: refusing to run with non-directory repo .venv: $WORKSPACE_REPO_VENV_PATH" >&2
+    exit 1
+  fi
+
+  if [[ -d "$WORKSPACE_REPO_VENV_PATH" ]]; then
+    WORKSPACE_REPO_VENV_MASK_ARGS=(
+      -v "${WORKSPACE_REPO_VENV_MASK_DIR}:${WORKSPACE_REPO_VENV_PATH}:rw,nosuid,nodev,Z"
+    )
+  fi
+}
+
 common_ensure_json_object_file() {
   local path="$1"
   local description="$2"
@@ -428,6 +461,8 @@ common_check_workspace_bind_paths() {
   common_require_mount_path "$ROOT" "workspace destination path"
   common_require_mount_path "$WORKSPACE_TMP_DIR" "temporary directory source path"
   common_require_mount_path "/tmp" "temporary directory destination path"
+  common_require_mount_path "$WORKSPACE_REPO_VENV_PATH" "repo .venv destination path"
+  common_require_mount_path "$WORKSPACE_REPO_VENV_MASK_DIR" "repo .venv mask source path"
   common_require_mount_path "$WORKSPACE_CACHE_DIR" "cache source path"
   common_require_mount_path "/aisb-${TOOL}/cache" "cache destination path"
   common_require_mount_path "$WORKSPACE_STATE_DIR" "state source path"
