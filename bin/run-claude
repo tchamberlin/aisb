@@ -35,9 +35,134 @@ common_maybe_relabel_auth_file "$HOME/.claude/.credentials.json" "Claude credent
 common_maybe_relabel_auth_file "$HOME/.claude/settings.json" "Claude settings"
 
 CLAUDE_DIR="${STATE_BASE}/claude/${HASH}/dot-claude"
+CLAUDE_HOME_DIR="${STATE_BASE}/claude/${HASH}/home-claude"
 mkdir -p "$CLAUDE_DIR"
+mkdir -p "$CLAUDE_HOME_DIR"
 
 common_require_mount_path "${CLAUDE_DIR}/claude.json" "Claude repo config source path"
+common_require_mount_path "${CLAUDE_HOME_DIR}" "Claude repo state source path"
+common_require_mount_path "${CLAUDE_HOME_DIR}/settings.json" "Claude repo settings source path"
+common_require_mount_path "${CLAUDE_HOME_DIR}/.credentials.json" "Claude repo credentials source path"
+
+claude_project_mcp_json_is_usable() {
+  [[ -f "$ROOT/.mcp.json" && -r "$ROOT/.mcp.json" ]]
+}
+
+claude_check_project_mcp_json() {
+  local mcp_path="$ROOT/.mcp.json"
+
+  if [[ ! -e "$mcp_path" ]]; then
+    return 0
+  fi
+
+  if claude_project_mcp_json_is_usable; then
+    return 0
+  fi
+
+  echo "Error: project .mcp.json exists but is not readable: $mcp_path" >&2
+  ls -ld "$ROOT" "$mcp_path" >&2 || true
+  if command -v stat >/dev/null 2>&1; then
+    stat -c '[aisb:claude] %n mode=%a owner=%U group=%G context=%C' "$ROOT" "$mcp_path" >&2 || true
+  fi
+  echo >&2
+  echo "Fix file permissions if this project intentionally uses .mcp.json:" >&2
+  echo "  chmod u+r '$mcp_path'" >&2
+  echo >&2
+  echo "On SELinux hosts, fix the label or rerun once with workspace relabeling enabled:" >&2
+  echo "  AISB_RELABEL_WORKSPACE=1 claude" >&2
+  exit 1
+}
+
+claude_scope_repo_config() {
+  local config_path="$1"
+  local prune_mcp=false
+  local tmp
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "[aisb:claude] warning: jq not found; cannot prune repo-scoped Claude project config" >&2
+    return 0
+  fi
+
+  if ! claude_project_mcp_json_is_usable && [[ "${AISB_CLAUDE_KEEP_PROJECT_MCPS:-0}" != "1" ]]; then
+    prune_mcp=true
+  fi
+
+  tmp="$(mktemp "${config_path}.tmp.XXXXXX")"
+  if ! jq --arg root "$ROOT" --argjson prune_mcp "$prune_mcp" '
+    if (.projects? | type) == "object" then
+      .projects = (
+        if .projects[$root] == null then
+          {}
+        else
+          {($root): .projects[$root]}
+        end
+      )
+    else
+      .
+    end
+    | if $prune_mcp then
+        del(
+          .mcpServers,
+          .enabledMcpjsonServers,
+          .disabledMcpjsonServers,
+          .projects[$root].mcpServers,
+          .projects[$root].enabledMcpjsonServers,
+          .projects[$root].disabledMcpjsonServers
+        )
+      else
+        .
+      end
+  ' "$config_path" > "$tmp"; then
+    rm -f "$tmp"
+    echo "Error: Claude repo config is not valid JSON: $config_path" >&2
+    exit 1
+  fi
+
+  chmod --reference="$config_path" "$tmp" 2>/dev/null || chmod 0600 "$tmp"
+  mv "$tmp" "$config_path"
+}
+
+claude_preflight_workspace_mount() {
+  local output status
+
+  set +e
+  output="$(
+    podman run "${COMMON_PODMAN_ARGS[@]}" \
+      --entrypoint /bin/sh \
+      "$IMAGE" \
+      -c '
+        set -eu
+        pwd >/dev/null
+        ls -ld . >/dev/null
+        if [ -e .mcp.json ]; then
+          test -r .mcp.json
+        fi
+      ' 2>&1
+  )"
+  status=$?
+  set -e
+
+  if (( status == 0 )); then
+    return 0
+  fi
+
+  echo "Error: container cannot read the mounted workspace correctly: $ROOT" >&2
+  echo >&2
+  echo "Claude may report this as an EACCES parse error for $ROOT/.mcp.json even when that file does not exist." >&2
+  echo >&2
+  echo "Container preflight output:" >&2
+  printf '%s\n' "$output" >&2
+  echo >&2
+  echo "Host-side path details:" >&2
+  ls -ld "$ROOT" "$ROOT/.mcp.json" >&2 || true
+  if command -v stat >/dev/null 2>&1; then
+    stat -c '[aisb:claude] %n mode=%a owner=%U group=%G context=%C' "$ROOT" "$ROOT/.mcp.json" >&2 || true
+  fi
+  echo >&2
+  echo "Most likely fix on SELinux hosts:" >&2
+  echo "  AISB_RELABEL_WORKSPACE=1 claude doctor" >&2
+  exit 1
+}
 
 # Seed per-repo .claude.json from host on first run, else create an empty
 # placeholder so the bind-mount target exists.
@@ -49,9 +174,23 @@ if [[ ! -e "$CLAUDE_DIR/claude.json" ]]; then
   fi
 fi
 common_ensure_json_object_file "$CLAUDE_DIR/claude.json" "Claude repo config"
+if [[ ! -e "$CLAUDE_HOME_DIR/settings.json" ]]; then
+  cp -p "$HOME/.claude/settings.json" "$CLAUDE_HOME_DIR/settings.json"
+fi
+common_ensure_json_object_file "$CLAUDE_HOME_DIR/settings.json" "Claude repo settings"
+if [[ ! -e "$CLAUDE_HOME_DIR/.credentials.json" ]]; then
+  cp -p "$HOME/.claude/.credentials.json" "$CLAUDE_HOME_DIR/.credentials.json"
+fi
+common_ensure_json_object_file "$CLAUDE_HOME_DIR/.credentials.json" "Claude repo credentials"
+claude_check_project_mcp_json
+claude_scope_repo_config "$CLAUDE_DIR/claude.json"
+claude_scope_repo_config "$CLAUDE_HOME_DIR/settings.json"
+claude_preflight_workspace_mount
 
 TOOL_MOUNTS=(
-  -v "${HOME}/.claude:${USER_HOME}/.claude:rw,nosuid,nodev,noexec"
+  -v "${CLAUDE_HOME_DIR}:${USER_HOME}/.claude:rw,nosuid,nodev,noexec,z"
+  -v "${HOME}/.claude/.credentials.json:${USER_HOME}/.claude/.credentials.json:rw,nosuid,nodev,noexec"
+  -v "${CLAUDE_HOME_DIR}/settings.json:${USER_HOME}/.claude/settings.json:rw,nosuid,nodev,noexec,z"
   -v "${CLAUDE_DIR}/claude.json:${USER_HOME}/.claude.json:rw,nosuid,nodev,noexec,z"
 )
 
@@ -75,8 +214,9 @@ CLAUDE_OPTS+=(
 
 if [[ "${AISB_QUIET:-0}" != "1" ]]; then
   if [[ "${AISB_DEBUG:-0}" == "1" ]]; then
-    echo "[aisb:claude:debug] claude config: $HOME/.claude -> ${USER_HOME}/.claude (rw)" >&2
-    echo "[aisb:claude:debug] claude host config: $HOME/.claude.json -> ${USER_HOME}/.claude.json (rw)" >&2
+    echo "[aisb:claude:debug] claude state: $CLAUDE_HOME_DIR -> ${USER_HOME}/.claude (rw)" >&2
+    echo "[aisb:claude:debug] claude credentials: $HOME/.claude/.credentials.json -> ${USER_HOME}/.claude/.credentials.json (rw)" >&2
+    echo "[aisb:claude:debug] claude repo config: $CLAUDE_DIR/claude.json -> ${USER_HOME}/.claude.json (rw)" >&2
   fi
   if ((${#CLAUDE_FORWARDED_VARS[@]})); then
     echo "[aisb:claude] claude env: forwarding ${CLAUDE_FORWARDED_VARS[*]}" >&2

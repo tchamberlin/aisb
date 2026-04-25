@@ -22,7 +22,13 @@ set -euo pipefail
 #   codex   -> aisb-codex:latest, or localhost/aisb-codex-<repo-hash>:latest
 #   pi      -> aisb-pi:latest, or localhost/aisb-pi-<repo-hash>:latest
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_SOURCE" ]]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+  SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+  [[ "$SCRIPT_SOURCE" == /* ]] || SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # shellcheck source=bin/_repo-config.sh

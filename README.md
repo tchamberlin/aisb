@@ -19,17 +19,17 @@ fresh container; only the current repo and per-agent auth are mounted.
 | `bin/run-codex`        | Run Codex against the current repo.                                      |
 | `bin/run-pi`           | Run pi against the current repo.                                         |
 | `bin/run-sb`           | Generic sandboxed shell / command runner on the base image.              |
-| `install.sh`           | Symlink `claude`/`codex`/`pi`/`sb` into `~/.local/bin`.                  |
+| `install.sh`           | Symlink `claude`/`codex`/`pi`/`sb`/`aisb-build` into `~/.local/bin`.     |
 | `seccomp-strict.json`  | Optional seccomp profile (default + extra denies). Enable via env var.   |
 | `.envrc.example`       | Sample [direnv] hook that pulls API keys via [pass]. Copy to `.envrc`.   |
 
 ## Install
 
 ```sh
-./install.sh                    # symlinks ~/.local/bin/{claude,codex,pi,sb}
-bin/build-containers all        # base + three flavors (parallel)
-bin/build-containers --no-cache # rebuild without the podman layer cache
-AISB_BUILD_SEQUENTIAL=1 bin/build-containers all
+./install.sh                # symlinks ~/.local/bin/{claude,codex,pi,sb,aisb-build}
+aisb-build all              # base + three flavors (parallel)
+aisb-build --no-cache       # rebuild without the podman layer cache
+AISB_BUILD_SEQUENTIAL=1 aisb-build all
 ```
 
 Requires: `podman`, `bash`, `npm` (for version-pin lookups in `build-containers`).
@@ -196,8 +196,8 @@ Per-wrapper overrides:
 | `SB_IMAGE`                 | Override image tag for `run-sb`.                                      |
 | `CLAUDE_SAFE_MODE=1`       | Keep Claude's built-in permission prompts.                            |
 | `CODEX_SAFE_MODE=1`        | Keep Codex's built-in approvals + sandbox.                            |
-| `CLAUDE_NO_CACHE=1`        | Pass `--no-cache` to `podman build` (or use `bin/build-containers --no-cache`). |
-| `AISB_BUILD_SEQUENTIAL=1`  | Build `claude`, `codex`, and `pi` sequentially for `bin/build-containers all`; useful for debugging constrained repo bases. |
+| `CLAUDE_NO_CACHE=1`        | Pass `--no-cache` to `podman build` (or use `aisb-build --no-cache`).    |
+| `AISB_BUILD_SEQUENTIAL=1`  | Build `claude`, `codex`, and `pi` sequentially for `aisb-build all`; useful for debugging constrained repo bases. |
 | `BASE_IMAGE`               | Override base image tag at build time.                                |
 | `AISB_AUTH_WRITE=1`        | Mount the repo read-only during auth-oriented runs.                   |
 | `CODEX_AUTH_WRITE=1`       | As above, for `run-codex` only.                                       |
@@ -289,7 +289,7 @@ Build repo-specific tool images from inside the project repo, or point the build
 script at the project explicitly:
 
 ```sh
-AISB_WORKSPACE=/path/to/project /path/to/aisb/bin/build-containers all
+AISB_WORKSPACE=/path/to/project aisb-build all
 ```
 
 Explicit environment overrides keep precedence: `SB_IMAGE`, `CLAUDE_IMAGE`,
