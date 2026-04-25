@@ -170,19 +170,7 @@ if [[ -d "$GH_HOST_CONFIG" ]]; then
   GH_OPTS+=(-v "${GH_HOST_CONFIG}:/home/sb/.config/gh:ro,nosuid,nodev,noexec")
 fi
 
-if ! podman image exists "$IMAGE" 2>/dev/null; then
-  echo "Error: Image '$IMAGE' not found." >&2
-  if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && -z "${SB_IMAGE:-}" ]] \
-    && ! aisb_repo_base_is_local_containerfile; then
-    echo "Build or pull the repo-provided base image, then retry." >&2
-  else
-    echo "Build it first with:" >&2
-    echo "  $(aisb_build_command_hint "$SCRIPT_DIR" "$ROOT" base)" >&2
-  fi
-  exit 1
-fi
-
-common_maybe_prompt_rebuild_stale_image
+common_check_image
 
 # Interactive only if stdin is a tty
 TTY_OPTS=(-i)

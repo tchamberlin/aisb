@@ -601,13 +601,59 @@ _common_warn_memory() {
 
 common_check_image() {
   if ! podman image exists "$IMAGE" 2>/dev/null; then
-    echo "Error: Image '$IMAGE' not found. Build it first with:" >&2
-    echo "  $(aisb_build_command_hint "$_AISB_COMMON_DIR" "$ROOT" "$TOOL")" >&2
-    exit 1
+    common_handle_missing_image
   fi
 
   common_maybe_prompt_rebuild_stale_image
   common_maybe_repair_workspace_relabel "$ROOT"
+}
+
+common_handle_missing_image() {
+  local build_flavor build_cmd reply env_var
+
+  env_var="$(aisb_tool_image_env_var "$TOOL")"
+  if ! aisb_tool_uses_managed_image "$TOOL"; then
+    echo "Error: Image '$IMAGE' not found." >&2
+    if [[ -n "${!env_var:-}" ]]; then
+      echo "The image comes from ${env_var}; build or pull it, then retry." >&2
+    elif [[ "$TOOL" == "sb" && -n "${AISB_REPO_BASE_IMAGE:-}" ]]; then
+      echo "Build or pull the repo-provided base image, then retry." >&2
+    else
+      echo "Build or pull the image, then retry." >&2
+    fi
+    exit 1
+  fi
+
+  build_flavor="$(aisb_managed_image_build_flavor "$TOOL")"
+  build_cmd="$(aisb_build_command_hint "$_AISB_COMMON_DIR" "$ROOT" "$build_flavor")"
+
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    echo "Error: Image '$IMAGE' not found. Build it first with:" >&2
+    echo "  $build_cmd" >&2
+    exit 1
+  fi
+
+  echo "Image '$IMAGE' not found." >&2
+  printf "Build it now with \`%s\`? [Y/n] " "$build_cmd" >&2
+  read -r reply || reply=""
+  case "$reply" in
+    ""|y|Y|yes|Yes|YES)
+      if ! eval "$build_cmd"; then
+        echo "Error: build failed; refusing to continue without image '$IMAGE'" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      echo "Error: image '$IMAGE' is required to continue." >&2
+      echo "Build it later with: $build_cmd" >&2
+      exit 1
+      ;;
+  esac
+
+  if ! podman image exists "$IMAGE" 2>/dev/null; then
+    echo "Error: build completed but image '$IMAGE' is still missing." >&2
+    exit 1
+  fi
 }
 
 common_image_label() {
