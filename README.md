@@ -80,12 +80,13 @@ The wrappers:
 - print a short startup summary to stderr with the workspace, repo config,
   selected image, and resource caps. Set `AISB_DEBUG=1` to include detailed
   mount/auth/hardening diagnostics, or `AISB_QUIET=1` to suppress startup logs.
-- do not relabel the workspace mount by default; on SELinux hosts this may
-  fail closed with permission denied instead of changing host labels. Set
-  `AISB_RELABEL_WORKSPACE=1` only for a narrow project directory that you
-  intentionally want Podman to relabel. `AISB_ALLOW_DANGEROUS_ROOT=1` does not
-  allow relabeling a broad root; that requires the separate
-  `AISB_ALLOW_DANGEROUS_RELABEL=1` escape hatch.
+- on SELinux hosts, ask before marking a repo container-readable the first time
+  an agent wrapper runs there. Approval is remembered per repo under AISB state
+  and future runs mount the workspace with Podman's `:z` relabel option. Set
+  `AISB_RELABEL_WORKSPACE=1` to approve relabeling noninteractively for a narrow
+  project directory. `AISB_ALLOW_DANGEROUS_ROOT=1` does not allow relabeling a
+  broad root; that requires the separate `AISB_ALLOW_DANGEROUS_RELABEL=1`
+  escape hatch.
 
 ## Hardening
 
@@ -153,9 +154,10 @@ the sandbox with sensitive material:
 - **SELinux relabeling is opt-in for the repo.** The wrappers still use
   relabeling for wrapper-owned state/cache directories. They also ask before
   relabeling individual auth/config paths in `$HOME` unless
-  `AISB_RELABEL_AUTH=1` is set. The workspace mount is not relabeled unless
-  `AISB_RELABEL_WORKSPACE=1` is set. If a previous run accidentally relabeled
-  broader `$HOME` content, restore defaults with:
+  `AISB_RELABEL_AUTH=1` is set. For workspaces, agent wrappers prompt once per
+  repo before using Podman's `:z` relabel option and remember that approval
+  under `$XDG_STATE_HOME/claude-podman/workspaces/`. If a previous run
+  accidentally relabeled broader `$HOME` content, restore defaults with:
 
   ```sh
   restorecon -Rv -e "$HOME/.local/share/containers" "$HOME"
@@ -204,7 +206,7 @@ Per-wrapper overrides:
 | `AISB_DEBUG=1`             | Include detailed mount/auth/hardening diagnostics in startup logs. |
 | `AISB_QUIET=1`             | Suppress wrapper startup summary logs.                            |
 | `AISB_RELABEL_AUTH=1`      | Allow wrappers to relabel specific auth/config paths without prompting on SELinux hosts. |
-| `AISB_RELABEL_WORKSPACE=1` | Add `:z` to the workspace mount for SELinux relabeling.               |
+| `AISB_RELABEL_WORKSPACE=1` | Add `:z` to the workspace mount for SELinux relabeling without prompting. |
 | `AISB_MEMORY`              | `--memory` cap (default `8g`).                                        |
 | `AISB_CPUS`                | `--cpus` cap (default `4`).                                           |
 | `AISB_PIDS`                | `--pids-limit` cap (default `1024`).                                  |

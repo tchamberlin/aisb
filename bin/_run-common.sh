@@ -151,6 +151,8 @@ common_init() {
     REPO_MODE="ro"
   fi
 
+  common_maybe_prompt_workspace_container_readable
+
   WORKSPACE_MOUNT_OPTS="${REPO_MODE},nosuid,nodev"
   if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
     common_check_workspace_relabel "$ROOT"
@@ -386,6 +388,62 @@ common_selinux_context() {
 common_selinux_context_is_container() {
   local context="$1"
   [[ "$context" == *:container_file_t:* || "$context" == *:container_ro_file_t:* ]]
+}
+
+common_workspace_container_readable_marker() {
+  printf '%s\n' "${STATE_BASE}/workspaces/${HASH}/container-readable"
+}
+
+common_remember_workspace_container_readable() {
+  local marker
+  marker="$(common_workspace_container_readable_marker)"
+  mkdir -p "$(dirname "$marker")"
+  : > "$marker"
+}
+
+common_maybe_prompt_workspace_container_readable() {
+  local context marker answer
+
+  common_selinux_enabled || return 0
+  [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]] && return 0
+
+  context="$(common_selinux_context "$ROOT")"
+  if common_selinux_context_is_container "$context"; then
+    common_remember_workspace_container_readable
+    return 0
+  fi
+
+  marker="$(common_workspace_container_readable_marker)"
+  if [[ -e "$marker" ]]; then
+    AISB_RELABEL_WORKSPACE=1
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    echo "Error: SELinux may prevent the container from reading the workspace: $ROOT" >&2
+    echo "Current label: ${context:-unknown}" >&2
+    echo "Run once interactively to approve workspace relabeling, or rerun with AISB_RELABEL_WORKSPACE=1." >&2
+    exit 1
+  fi
+
+  common_check_workspace_relabel "$ROOT"
+
+  echo "SELinux may prevent the container from reading the workspace:" >&2
+  echo "  $ROOT" >&2
+  echo "Current label: ${context:-unknown}" >&2
+  echo "AISB can mark this repo as container-readable by mounting it with Podman's :z relabel option." >&2
+  read -r -p "Mark this repo container-readable for future AISB runs? [y/N] " answer
+  case "$answer" in
+    y|Y|yes|Yes|YES)
+      common_remember_workspace_container_readable
+      AISB_RELABEL_WORKSPACE=1
+      ;;
+    *)
+      echo "Error: refusing to run until the workspace is readable by the container." >&2
+      echo "Rerun and approve the prompt, or set AISB_RELABEL_WORKSPACE=1 intentionally." >&2
+      exit 1
+      ;;
+  esac
 }
 
 common_maybe_repair_workspace_relabel() {
