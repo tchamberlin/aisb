@@ -74,6 +74,77 @@ common_log_startup() {
   fi
 }
 
+common_tool_package_name() {
+  case "$1" in
+    claude) printf '%s\n' "@anthropic-ai/claude-code" ;;
+    codex)  printf '%s\n' "@openai/codex" ;;
+    pi)     printf '%s\n' "@mariozechner/pi-coding-agent" ;;
+    *) return 1 ;;
+  esac
+}
+
+common_cache_file_is_fresh() {
+  local path="$1"
+  local ttl="$2"
+  local now mtime
+
+  [[ -s "$path" ]] || return 1
+  now="$(date +%s)"
+  mtime="$(stat -c %Y "$path" 2>/dev/null || echo 0)"
+  (( now - mtime < ttl ))
+}
+
+common_latest_npm_version_cached() {
+  local package="$1"
+  local cache_dir cache_file ttl latest
+
+  ttl="${AISB_UPDATE_CHECK_TTL_SECONDS:-86400}"
+  cache_dir="${CACHE_BASE}/update-checks"
+  cache_file="${cache_dir}/${package//@/_}.version"
+  cache_file="${cache_file//\//_}"
+
+  if common_cache_file_is_fresh "$cache_file" "$ttl"; then
+    sed -n '1p' "$cache_file"
+    return 0
+  fi
+
+  mkdir -p "$cache_dir"
+  if command -v timeout >/dev/null 2>&1; then
+    latest="$(NPM_CONFIG_FUND=false NPM_CONFIG_UPDATE_NOTIFIER=false timeout 5s npm view "$package" version 2>/dev/null || true)"
+  else
+    latest="$(NPM_CONFIG_FUND=false NPM_CONFIG_UPDATE_NOTIFIER=false npm view "$package" version 2>/dev/null || true)"
+  fi
+  latest="$(printf '%s' "$latest" | awk 'NF { print $1; exit }')"
+  [[ -n "$latest" ]] || return 1
+
+  printf '%s\n' "$latest" > "$cache_file"
+  printf '%s\n' "$latest"
+}
+
+common_maybe_warn_tool_update() {
+  local package current latest flavor hint
+
+  [[ "${AISB_QUIET:-0}" == "1" ]] && return 0
+  [[ "${AISB_UPDATE_CHECK:-1}" == "0" ]] && return 0
+  case "$TOOL" in
+    claude|codex|pi) ;;
+    *) return 0 ;;
+  esac
+
+  package="$(common_tool_package_name "$TOOL")" || return 0
+  current="$(common_image_label "$IMAGE" "io.aisb.tool.version")"
+  [[ -n "$current" && "$current" != "<no value>" && "$current" != "unknown" ]] || return 0
+
+  latest="$(common_latest_npm_version_cached "$package" || true)"
+  [[ -n "$latest" && "$latest" != "$current" ]] || return 0
+
+  flavor="$(aisb_managed_image_build_flavor "$TOOL")"
+  hint="$(aisb_build_command_hint "$_AISB_COMMON_DIR" "$ROOT" "$flavor")"
+  echo "[aisb:${TOOL}] update available: ${package} ${current} -> ${latest}" >&2
+  echo "[aisb:${TOOL}] rebuild the managed image with:" >&2
+  echo "  ${hint}" >&2
+}
+
 common_init() {
   : "${TOOL:?TOOL must be set before common_init}"
   : "${USER_NAME:?USER_NAME must be set before common_init}"
@@ -200,6 +271,8 @@ common_init() {
     -e "TMP=/tmp"
     -e "TEMP=/tmp"
     -e "NPM_CONFIG_CACHE=/tmp/npm-cache"
+    -e "NPM_CONFIG_FUND=false"
+    -e "NPM_CONFIG_UPDATE_NOTIFIER=false"
     -e "XDG_CACHE_HOME=/aisb-${TOOL}/cache"
     -e "XDG_STATE_HOME=/aisb-${TOOL}/state"
     -e "UV_CACHE_DIR=/aisb-${TOOL}/uv-cache"

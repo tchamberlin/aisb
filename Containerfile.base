@@ -42,6 +42,8 @@ ENV HOME=/home/sb \
     UV_TOOL_DIR=/uv-tools \
     UV_TOOL_BIN_DIR=/uv-bin \
     NPM_CONFIG_CACHE=/tmp/npm-cache \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
     PATH=/uv-bin:/home/sb/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 # Python tooling installed globally via uv tool. Install into /usr/local/bin so

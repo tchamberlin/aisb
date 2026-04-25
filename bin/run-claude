@@ -22,6 +22,7 @@ common_require_mount_path "$HOME/.claude" "Claude config source path"
 common_require_mount_path "${USER_HOME}/.claude" "Claude config destination path"
 
 common_check_image
+common_maybe_warn_tool_update
 
 # Ensure host-side files exist. Claude's config directory is mounted rw so its
 # atomic credential/settings writes persist normally.
@@ -67,6 +68,10 @@ for var in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; do
     CLAUDE_FORWARDED_VARS+=("$var")
   fi
 done
+CLAUDE_OPTS+=(
+  -e "DISABLE_AUTOUPDATER=1"
+  -e "DISABLE_UPDATES=1"
+)
 
 if [[ "${AISB_QUIET:-0}" != "1" ]]; then
   echo "[aisb:claude] claude config: $HOME/.claude -> ${USER_HOME}/.claude (rw)" >&2
@@ -81,6 +86,7 @@ if [[ "${AISB_QUIET:-0}" != "1" ]]; then
   else
     echo "[aisb:claude] claude permissions: bypassed with --dangerously-skip-permissions" >&2
   fi
+  echo "[aisb:claude] updates: Claude self-updates disabled; use $SCRIPT_DIR/build-containers claude" >&2
 fi
 
 exec podman run "${COMMON_PODMAN_ARGS[@]}" "${CLAUDE_OPTS[@]}" "${TOOL_MOUNTS[@]}" \

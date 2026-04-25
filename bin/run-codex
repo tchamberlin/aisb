@@ -20,6 +20,7 @@ common_require_mount_path "$HOME/.codex" "Codex config source path"
 common_require_mount_path "${USER_HOME}/.codex" "Codex config destination path"
 
 common_check_image
+common_maybe_warn_tool_update
 
 # Mount the full Codex config directory rw so login, token refresh, settings,
 # and any atomic file replacements persist normally.
@@ -36,6 +37,7 @@ TOOL_MOUNTS=(
 
 # Container IS the sandbox, so bypass codex's internal one unless opted out.
 CODEX_FLAGS=()
+CODEX_FLAGS+=(-c "check_for_update_on_startup=false")
 if [[ "${CODEX_SAFE_MODE:-0}" != "1" ]]; then
   CODEX_FLAGS+=(--dangerously-bypass-approvals-and-sandbox)
 fi
@@ -75,6 +77,7 @@ if [[ "${AISB_QUIET:-0}" != "1" ]]; then
   else
     echo "[aisb:codex] codex sandbox: bypassed with --dangerously-bypass-approvals-and-sandbox" >&2
   fi
+  echo "[aisb:codex] updates: Codex startup update check disabled; use $SCRIPT_DIR/build-containers codex" >&2
 fi
 
 if [[ -z "${OPENAI_API_KEY:-}" ]] && codex_auth_is_empty && ! codex_command_allows_unauth "$@"; then

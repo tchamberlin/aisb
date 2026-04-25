@@ -1,7 +1,9 @@
 ARG BASE_IMAGE=localhost/aisb-base:latest
 FROM ${BASE_IMAGE}
 
-ENV NPM_CONFIG_CACHE=/tmp/npm-cache
+ENV NPM_CONFIG_CACHE=/tmp/npm-cache \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
 
 COPY --chmod=0755 container/install-agent-runtime-deps.sh /usr/local/bin/aisb-install-agent-runtime-deps
 COPY --chmod=0755 container/install-agent-python-tools.sh /usr/local/bin/aisb-install-agent-python-tools
@@ -12,8 +14,13 @@ RUN /usr/local/bin/aisb-install-agent-runtime-deps \
  && rm /usr/local/bin/aisb-install-agent-runtime-deps /usr/local/bin/aisb-install-agent-python-tools /usr/local/bin/aisb-install-node-npm
 
 ARG CODEX_VERSION=unknown
+LABEL io.aisb.tool=codex \
+      io.aisb.tool.package="@openai/codex" \
+      io.aisb.tool.version="${CODEX_VERSION}"
 RUN echo "codex version: ${CODEX_VERSION}" \
  && test "${CODEX_VERSION}" != "unknown" \
+ && mkdir -p /usr/local/share/aisb \
+ && printf '%s\n' "${CODEX_VERSION}" > /usr/local/share/aisb/codex-version \
  && npm install -g "@openai/codex@${CODEX_VERSION}" \
  && rm -rf "$NPM_CONFIG_CACHE"
 

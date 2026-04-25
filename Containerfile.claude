@@ -8,12 +8,18 @@ RUN /usr/local/bin/aisb-install-agent-runtime-deps \
  && rm /usr/local/bin/aisb-install-agent-runtime-deps /usr/local/bin/aisb-install-agent-python-tools
 
 ARG CLAUDE_VERSION=unknown
+LABEL io.aisb.tool=claude \
+      io.aisb.tool.package="@anthropic-ai/claude-code" \
+      io.aisb.tool.version="${CLAUDE_VERSION}"
 # Claude is installed via the upstream curl|bash installer. Accepted as
 # standard practice for this vendor; pinning is left to CLAUDE_VERSION as a
 # cache-busting key (install.sh fetches latest at build time). Revisit to
 # pin via `npm i -g @anthropic-ai/claude-code@${CLAUDE_VERSION}` if the
 # TOCTOU window becomes a concern.
 RUN echo "claude-code cache key: ${CLAUDE_VERSION}" \
+ && test "${CLAUDE_VERSION}" != "unknown" \
+ && mkdir -p /usr/local/share/aisb \
+ && printf '%s\n' "${CLAUDE_VERSION}" > /usr/local/share/aisb/claude-version \
  && bash -lc 'set -euo pipefail; \
       export HOME=/opt/claude-staging; \
       export PATH="$HOME/.local/bin:$PATH"; \
