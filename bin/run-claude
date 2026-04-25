@@ -74,19 +74,23 @@ CLAUDE_OPTS+=(
 )
 
 if [[ "${AISB_QUIET:-0}" != "1" ]]; then
-  echo "[aisb:claude] claude config: $HOME/.claude -> ${USER_HOME}/.claude (rw)" >&2
-  echo "[aisb:claude] claude host config: $HOME/.claude.json -> ${USER_HOME}/.claude.json (rw)" >&2
+  if [[ "${AISB_DEBUG:-0}" == "1" ]]; then
+    echo "[aisb:claude:debug] claude config: $HOME/.claude -> ${USER_HOME}/.claude (rw)" >&2
+    echo "[aisb:claude:debug] claude host config: $HOME/.claude.json -> ${USER_HOME}/.claude.json (rw)" >&2
+  fi
   if ((${#CLAUDE_FORWARDED_VARS[@]})); then
     echo "[aisb:claude] claude env: forwarding ${CLAUDE_FORWARDED_VARS[*]}" >&2
-  else
-    echo "[aisb:claude] claude env: ANTHROPIC_API_KEY not set" >&2
+  elif [[ "${AISB_DEBUG:-0}" == "1" ]]; then
+    echo "[aisb:claude:debug] claude env: ANTHROPIC_API_KEY not set" >&2
   fi
   if [[ "${CLAUDE_SAFE_MODE:-0}" == "1" ]]; then
     echo "[aisb:claude] claude permissions: native prompts enabled" >&2
   else
     echo "[aisb:claude] claude permissions: bypassed with --dangerously-skip-permissions" >&2
   fi
-  echo "[aisb:claude] updates: Claude self-updates disabled; use $SCRIPT_DIR/build-containers claude" >&2
+  if [[ "${AISB_DEBUG:-0}" == "1" ]]; then
+    echo "[aisb:claude:debug] updates: Claude self-updates disabled; use $SCRIPT_DIR/build-containers claude" >&2
+  fi
 fi
 
 exec podman run "${COMMON_PODMAN_ARGS[@]}" "${CLAUDE_OPTS[@]}" "${TOOL_MOUNTS[@]}" \

@@ -66,18 +66,22 @@ codex_command_allows_unauth() {
 }
 
 if [[ "${AISB_QUIET:-0}" != "1" ]]; then
-  echo "[aisb:codex] codex config: $HOME/.codex -> ${USER_HOME}/.codex (rw)" >&2
+  if [[ "${AISB_DEBUG:-0}" == "1" ]]; then
+    echo "[aisb:codex:debug] codex config: $HOME/.codex -> ${USER_HOME}/.codex (rw)" >&2
+  fi
   if [[ -n "${OPENAI_API_KEY:-}" ]]; then
     echo "[aisb:codex] codex env: forwarding OPENAI_API_KEY" >&2
-  else
-    echo "[aisb:codex] codex env: OPENAI_API_KEY not set" >&2
+  elif [[ "${AISB_DEBUG:-0}" == "1" ]]; then
+    echo "[aisb:codex:debug] codex env: OPENAI_API_KEY not set" >&2
   fi
   if [[ "${CODEX_SAFE_MODE:-0}" == "1" ]]; then
     echo "[aisb:codex] codex sandbox: native approvals enabled" >&2
   else
     echo "[aisb:codex] codex sandbox: bypassed with --dangerously-bypass-approvals-and-sandbox" >&2
   fi
-  echo "[aisb:codex] updates: Codex startup update check disabled; use $SCRIPT_DIR/build-containers codex" >&2
+  if [[ "${AISB_DEBUG:-0}" == "1" ]]; then
+    echo "[aisb:codex:debug] updates: Codex startup update check disabled; use $SCRIPT_DIR/build-containers codex" >&2
+  fi
 fi
 
 if [[ -z "${OPENAI_API_KEY:-}" ]] && codex_auth_is_empty && ! codex_command_allows_unauth "$@"; then

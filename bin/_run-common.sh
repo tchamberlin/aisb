@@ -531,16 +531,18 @@ common_maybe_repair_workspace_relabel() {
     return 0
   fi
 
+  [[ "${AISB_DEBUG:-0}" == "1" ]] || return 0
+
   if ! command -v restorecon >/dev/null 2>&1; then
-    echo "warn: workspace root appears SELinux-relabeled for containers: $root" >&2
-    echo "warn: current label: ${context:-unknown}" >&2
-    echo "warn: install or run \`restorecon -Rv '$root'\` manually to restore host labels" >&2
+    echo "[aisb:${TOOL}:debug] workspace root appears SELinux-relabeled for containers: $root" >&2
+    echo "[aisb:${TOOL}:debug] current label: ${context:-unknown}" >&2
+    echo "[aisb:${TOOL}:debug] install or run \`restorecon -Rv '$root'\` manually to restore host labels" >&2
     return 0
   fi
 
-  echo "warn: workspace root appears SELinux-relabeled for containers: $root" >&2
-  echo "warn: current label: ${context:-unknown}" >&2
-  echo "warn: restore defaults with: restorecon -Rv '$root'" >&2
+  echo "[aisb:${TOOL}:debug] workspace root appears SELinux-relabeled for containers: $root" >&2
+  echo "[aisb:${TOOL}:debug] current label: ${context:-unknown}" >&2
+  echo "[aisb:${TOOL}:debug] restore defaults with: restorecon -Rv '$root'" >&2
 }
 
 common_maybe_relabel_auth_file() {
