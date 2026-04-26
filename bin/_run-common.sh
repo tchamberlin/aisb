@@ -96,12 +96,13 @@ common_cache_file_is_fresh() {
 
 common_latest_npm_version_cached() {
   local package="$1"
-  local cache_dir cache_file ttl latest
+  local cache_dir cache_file cache_name ttl latest
 
   ttl="${AISB_UPDATE_CHECK_TTL_SECONDS:-86400}"
   cache_dir="${CACHE_BASE}/update-checks"
-  cache_file="${cache_dir}/${package//@/_}.version"
-  cache_file="${cache_file//\//_}"
+  cache_name="${package//@/_}"
+  cache_name="${cache_name//\//_}"
+  cache_file="${cache_dir}/${cache_name}.version"
 
   if common_cache_file_is_fresh "$cache_file" "$ttl"; then
     sed -n '1p' "$cache_file"
