@@ -11,28 +11,35 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 TOOL="codex"
 USER_NAME="aisb-$TOOL"
 USER_HOME="/home/$USER_NAME"
+AISB_MOUNT_USER_HOME_TMPFS=0
 
 # shellcheck source=bin/_run-common.sh
 source "$SCRIPT_DIR/_run-common.sh"
 common_init
 
-common_require_mount_path "$HOME/.codex" "Codex config source path"
-common_require_mount_path "${USER_HOME}/.codex" "Codex config destination path"
+CODEX_HOME_DIR="${STATE_BASE}/codex/${HASH}/home-codex"
+mkdir -p "$CODEX_HOME_DIR"
+
+common_require_mount_path "${CODEX_HOME_DIR}" "Codex repo home source path"
+common_require_mount_path "${CODEX_HOME_DIR}/.codex" "Codex repo config source path"
 
 common_check_image
 common_maybe_warn_tool_update
 
-# Mount the full Codex config directory rw so login, token refresh, settings,
-# and any atomic file replacements persist normally.
+# Seed per-repo Codex home from host config on first use. After that, Codex
+# state belongs to this repo-scoped durable home and survives container removal.
 mkdir -p "$HOME/.codex"
 common_ensure_json_object_file "$HOME/.codex/auth.json" "Codex auth"
 touch "$HOME/.codex/config.toml"
-common_maybe_relabel_auth_file "$HOME/.codex" "Codex config directory"
-common_maybe_relabel_auth_file "$HOME/.codex/auth.json" "Codex auth"
-common_maybe_relabel_auth_file "$HOME/.codex/config.toml" "Codex config"
+if [[ ! -e "$CODEX_HOME_DIR/.codex" ]]; then
+  cp -a "$HOME/.codex" "$CODEX_HOME_DIR/.codex"
+fi
+mkdir -p "$CODEX_HOME_DIR/.codex"
+common_ensure_json_object_file "$CODEX_HOME_DIR/.codex/auth.json" "Codex repo auth"
+touch "$CODEX_HOME_DIR/.codex/config.toml"
 
 TOOL_MOUNTS=(
-  -v "${HOME}/.codex:${USER_HOME}/.codex:rw,nosuid,nodev,noexec"
+  -v "${CODEX_HOME_DIR}:${USER_HOME}:rw,nosuid,nodev,noexec,z"
 )
 
 # Container IS the sandbox, so bypass codex's internal one unless opted out.
@@ -49,7 +56,7 @@ fi
 
 codex_auth_is_empty() {
   local compact
-  compact="$(tr -d '[:space:]' < "$HOME/.codex/auth.json")"
+  compact="$(tr -d '[:space:]' < "$CODEX_HOME_DIR/.codex/auth.json")"
   [[ -z "$compact" || "$compact" == "{}" ]]
 }
 
@@ -67,7 +74,7 @@ codex_command_allows_unauth() {
 
 if [[ "${AISB_QUIET:-0}" != "1" ]]; then
   if [[ "${AISB_DEBUG:-0}" == "1" ]]; then
-    echo "[aisb:codex:debug] codex config: $HOME/.codex -> ${USER_HOME}/.codex (rw)" >&2
+    echo "[aisb:codex:debug] codex home: $CODEX_HOME_DIR -> ${USER_HOME} (rw)" >&2
   fi
   if [[ -n "${OPENAI_API_KEY:-}" ]]; then
     echo "[aisb:codex] codex env: forwarding OPENAI_API_KEY" >&2
@@ -87,7 +94,7 @@ fi
 if [[ -z "${OPENAI_API_KEY:-}" ]] && codex_auth_is_empty && ! codex_command_allows_unauth "$@"; then
   echo "Error: Codex is not authenticated." >&2
   echo >&2
-  echo "No OPENAI_API_KEY is set and $HOME/.codex/auth.json has no account credentials." >&2
+  echo "No OPENAI_API_KEY is set and $CODEX_HOME_DIR/.codex/auth.json has no account credentials." >&2
   echo "Run one of:" >&2
   echo "  codex login --device-auth" >&2
   echo "  export OPENAI_API_KEY=..." >&2

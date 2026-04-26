@@ -11,6 +11,7 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 TOOL="pi"
 USER_NAME="aisb-$TOOL"
 USER_HOME="/home/$USER_NAME"
+AISB_MOUNT_USER_HOME_TMPFS=0
 
 # shellcheck source=bin/_run-common.sh
 source "$SCRIPT_DIR/_run-common.sh"
@@ -42,18 +43,22 @@ fi
 
 common_check_image
 
-# Pi has no persistent host auth file — API keys are forwarded via env.
-# State (sessions, logs) lives per-repo under STATE_BASE.
+# Pi state lives in a repo-scoped durable home. Seed any host-side state on
+# first use, then let the container own that per-repo copy.
 mkdir -p "$HOME/.pi/agent"
 
-PI_DIR="${STATE_BASE}/pi/${HASH}/dot-pi-agent"
-mkdir -p "$PI_DIR"
+PI_HOME_DIR="${STATE_BASE}/pi/${HASH}/home-pi"
+mkdir -p "$PI_HOME_DIR"
+if [[ ! -e "$PI_HOME_DIR/.pi" ]]; then
+  cp -a "$HOME/.pi" "$PI_HOME_DIR/.pi"
+fi
+mkdir -p "$PI_HOME_DIR/.pi/agent"
 
-common_require_mount_path "$PI_DIR" "pi state source path"
+common_require_mount_path "$PI_HOME_DIR" "pi home source path"
 common_require_mount_path "${USER_HOME}/.pi/agent" "pi state destination path"
 
 TOOL_MOUNTS=(
-  -v "${PI_DIR}:${USER_HOME}/.pi/agent:rw,nosuid,nodev,noexec,z"
+  -v "${PI_HOME_DIR}:${USER_HOME}:rw,nosuid,nodev,noexec,z"
 )
 
 if [[ "$PROJECT_MODELS_ENABLED" == "1" ]]; then
@@ -71,7 +76,7 @@ for var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY TO
 done
 
 if [[ "${AISB_QUIET:-0}" != "1" ]]; then
-  echo "[aisb:pi] pi state: $PI_DIR" >&2
+  echo "[aisb:pi] pi home: $PI_HOME_DIR" >&2
   if [[ "$PROJECT_MODELS_ENABLED" == "1" ]]; then
     echo "[aisb:pi] pi models: $PROJECT_MODELS (repo override)" >&2
   else

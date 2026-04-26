@@ -47,7 +47,7 @@ ENV HOME=/home/sb \
     PATH=/uv-bin:/home/sb/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 # Python tooling installed globally via uv tool. Install into /usr/local/bin so
-# the binaries remain visible even when wrappers mount runtime tmpfs at /uv-bin.
+# the binaries remain visible independently of wrapper-managed uv tool dirs.
 COPY --chmod=0755 container/install-agent-python-tools.sh /usr/local/bin/aisb-install-agent-python-tools
 RUN /usr/local/bin/aisb-install-agent-python-tools ruff ty prek \
  && rm /usr/local/bin/aisb-install-agent-python-tools

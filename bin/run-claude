@@ -11,15 +11,16 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 TOOL="claude"
 USER_NAME="aisb-$TOOL"
 USER_HOME="/home/$USER_NAME"
+AISB_MOUNT_USER_HOME_TMPFS=0
 
 # shellcheck source=bin/_run-common.sh
 source "$SCRIPT_DIR/_run-common.sh"
 common_init
 
-common_require_mount_path "$HOME/.claude.json" "Claude host config source path"
-common_require_mount_path "${USER_HOME}/.claude.json" "Claude host config destination path"
-common_require_mount_path "$HOME/.claude" "Claude config source path"
-common_require_mount_path "${USER_HOME}/.claude" "Claude config destination path"
+common_require_mount_path "$HOME/.claude.json" "Claude host config path"
+common_require_mount_path "${USER_HOME}/.claude.json" "Claude container config path"
+common_require_mount_path "$HOME/.claude" "Claude host state path"
+common_require_mount_path "${USER_HOME}/.claude" "Claude container state path"
 
 common_check_image
 common_maybe_warn_tool_update
@@ -30,19 +31,15 @@ mkdir -p "$HOME/.claude"
 common_ensure_json_object_file "$HOME/.claude.json" "Claude host config"
 common_ensure_json_object_file "$HOME/.claude/.credentials.json" "Claude credentials"
 common_ensure_json_object_file "$HOME/.claude/settings.json" "Claude settings"
-common_maybe_relabel_auth_file "$HOME/.claude" "Claude config directory"
-common_maybe_relabel_auth_file "$HOME/.claude/.credentials.json" "Claude credentials"
-common_maybe_relabel_auth_file "$HOME/.claude/settings.json" "Claude settings"
 
-CLAUDE_DIR="${STATE_BASE}/claude/${HASH}/dot-claude"
 CLAUDE_HOME_DIR="${STATE_BASE}/claude/${HASH}/home-claude"
-mkdir -p "$CLAUDE_DIR"
 mkdir -p "$CLAUDE_HOME_DIR"
 
-common_require_mount_path "${CLAUDE_DIR}/claude.json" "Claude repo config source path"
-common_require_mount_path "${CLAUDE_HOME_DIR}" "Claude repo state source path"
-common_require_mount_path "${CLAUDE_HOME_DIR}/settings.json" "Claude repo settings source path"
-common_require_mount_path "${CLAUDE_HOME_DIR}/.credentials.json" "Claude repo credentials source path"
+common_require_mount_path "${CLAUDE_HOME_DIR}" "Claude repo home source path"
+common_require_mount_path "${CLAUDE_HOME_DIR}/.claude" "Claude repo state source path"
+common_require_mount_path "${CLAUDE_HOME_DIR}/.claude.json" "Claude repo config source path"
+common_require_mount_path "${CLAUDE_HOME_DIR}/.claude/settings.json" "Claude repo settings source path"
+common_require_mount_path "${CLAUDE_HOME_DIR}/.claude/.credentials.json" "Claude repo credentials source path"
 
 claude_project_mcp_json_is_usable() {
   [[ -f "$ROOT/.mcp.json" && -r "$ROOT/.mcp.json" ]]
@@ -75,20 +72,15 @@ claude_check_project_mcp_json() {
 
 claude_scope_repo_config() {
   local config_path="$1"
-  local prune_mcp=false
   local tmp
 
   if ! command -v jq >/dev/null 2>&1; then
-    echo "[aisb:claude] warning: jq not found; cannot prune repo-scoped Claude project config" >&2
+    echo "[aisb:claude] warning: jq not found; cannot scope Claude project config" >&2
     return 0
   fi
 
-  if ! claude_project_mcp_json_is_usable && [[ "${AISB_CLAUDE_KEEP_PROJECT_MCPS:-0}" != "1" ]]; then
-    prune_mcp=true
-  fi
-
   tmp="$(mktemp "${config_path}.tmp.XXXXXX")"
-  if ! jq --arg root "$ROOT" --argjson prune_mcp "$prune_mcp" '
+  if ! jq --arg root "$ROOT" '
     if (.projects? | type) == "object" then
       .projects = (
         if .projects[$root] == null then
@@ -100,18 +92,6 @@ claude_scope_repo_config() {
     else
       .
     end
-    | if $prune_mcp then
-        del(
-          .mcpServers,
-          .enabledMcpjsonServers,
-          .disabledMcpjsonServers,
-          .projects[$root].mcpServers,
-          .projects[$root].enabledMcpjsonServers,
-          .projects[$root].disabledMcpjsonServers
-        )
-      else
-        .
-      end
   ' "$config_path" > "$tmp"; then
     rm -f "$tmp"
     echo "Error: Claude repo config is not valid JSON: $config_path" >&2
@@ -164,34 +144,50 @@ claude_preflight_workspace_mount() {
   exit 1
 }
 
-# Seed per-repo .claude.json from host on first run, else create an empty
-# placeholder so the bind-mount target exists.
-if [[ ! -e "$CLAUDE_DIR/claude.json" ]]; then
-  if [[ -s "$HOME/.claude.json" ]]; then
-    cp -p "$HOME/.claude.json" "$CLAUDE_DIR/claude.json"
+# Older AISB versions mounted this directory as ~/.claude. Move that layout
+# under a real persistent home so Claude's atomic writes to ~/.claude.json
+# survive container removal.
+if [[ ! -d "$CLAUDE_HOME_DIR/.claude" && ( -e "$CLAUDE_HOME_DIR/settings.json" || -e "$CLAUDE_HOME_DIR/.credentials.json" || -d "$CLAUDE_HOME_DIR/backups" ) ]]; then
+  mkdir -p "$CLAUDE_HOME_DIR/.claude"
+  shopt -s dotglob nullglob
+  for path in "$CLAUDE_HOME_DIR"/*; do
+    name="$(basename "$path")"
+    [[ "$name" == ".claude" ]] && continue
+    if [[ ! -e "$CLAUDE_HOME_DIR/.claude/$name" ]]; then
+      mv "$path" "$CLAUDE_HOME_DIR/.claude/$name"
+    fi
+  done
+  shopt -u dotglob nullglob
+fi
+mkdir -p "$CLAUDE_HOME_DIR/.claude"
+
+# Seed per-repo Claude state from host on first run, else create empty
+# placeholders so directory-level mounts preserve Claude's atomic rewrites.
+if [[ ! -e "$CLAUDE_HOME_DIR/.claude.json" ]]; then
+  if [[ -s "${STATE_BASE}/claude/${HASH}/dot-claude/claude.json" ]]; then
+    cp -p "${STATE_BASE}/claude/${HASH}/dot-claude/claude.json" "$CLAUDE_HOME_DIR/.claude.json"
+  elif [[ -s "$HOME/.claude.json" ]]; then
+    cp -p "$HOME/.claude.json" "$CLAUDE_HOME_DIR/.claude.json"
   else
-    common_ensure_json_object_file "$CLAUDE_DIR/claude.json" "Claude repo config"
+    common_ensure_json_object_file "$CLAUDE_HOME_DIR/.claude.json" "Claude repo config"
   fi
 fi
-common_ensure_json_object_file "$CLAUDE_DIR/claude.json" "Claude repo config"
-if [[ ! -e "$CLAUDE_HOME_DIR/settings.json" ]]; then
-  cp -p "$HOME/.claude/settings.json" "$CLAUDE_HOME_DIR/settings.json"
+common_ensure_json_object_file "$CLAUDE_HOME_DIR/.claude.json" "Claude repo config"
+if [[ ! -e "$CLAUDE_HOME_DIR/.claude/settings.json" ]]; then
+  cp -p "$HOME/.claude/settings.json" "$CLAUDE_HOME_DIR/.claude/settings.json"
 fi
-common_ensure_json_object_file "$CLAUDE_HOME_DIR/settings.json" "Claude repo settings"
-if [[ ! -e "$CLAUDE_HOME_DIR/.credentials.json" ]]; then
-  cp -p "$HOME/.claude/.credentials.json" "$CLAUDE_HOME_DIR/.credentials.json"
+common_ensure_json_object_file "$CLAUDE_HOME_DIR/.claude/settings.json" "Claude repo settings"
+if [[ ! -e "$CLAUDE_HOME_DIR/.claude/.credentials.json" ]]; then
+  cp -p "$HOME/.claude/.credentials.json" "$CLAUDE_HOME_DIR/.claude/.credentials.json"
 fi
-common_ensure_json_object_file "$CLAUDE_HOME_DIR/.credentials.json" "Claude repo credentials"
+common_ensure_json_object_file "$CLAUDE_HOME_DIR/.claude/.credentials.json" "Claude repo credentials"
 claude_check_project_mcp_json
-claude_scope_repo_config "$CLAUDE_DIR/claude.json"
-claude_scope_repo_config "$CLAUDE_HOME_DIR/settings.json"
+claude_scope_repo_config "$CLAUDE_HOME_DIR/.claude.json"
+claude_scope_repo_config "$CLAUDE_HOME_DIR/.claude/settings.json"
 claude_preflight_workspace_mount
 
 TOOL_MOUNTS=(
-  -v "${CLAUDE_HOME_DIR}:${USER_HOME}/.claude:rw,nosuid,nodev,noexec,z"
-  -v "${HOME}/.claude/.credentials.json:${USER_HOME}/.claude/.credentials.json:rw,nosuid,nodev,noexec"
-  -v "${CLAUDE_HOME_DIR}/settings.json:${USER_HOME}/.claude/settings.json:rw,nosuid,nodev,noexec,z"
-  -v "${CLAUDE_DIR}/claude.json:${USER_HOME}/.claude.json:rw,nosuid,nodev,noexec,z"
+  -v "${CLAUDE_HOME_DIR}:${USER_HOME}:rw,nosuid,nodev,noexec,z"
 )
 
 CLAUDE_FLAGS=()
@@ -210,13 +206,14 @@ done
 CLAUDE_OPTS+=(
   -e "DISABLE_AUTOUPDATER=1"
   -e "DISABLE_UPDATES=1"
+  -e "XDG_CONFIG_HOME=${USER_HOME}/.config"
+  -e "XDG_DATA_HOME=${USER_HOME}/.local/share"
 )
 
 if [[ "${AISB_QUIET:-0}" != "1" ]]; then
   if [[ "${AISB_DEBUG:-0}" == "1" ]]; then
-    echo "[aisb:claude:debug] claude state: $CLAUDE_HOME_DIR -> ${USER_HOME}/.claude (rw)" >&2
-    echo "[aisb:claude:debug] claude credentials: $HOME/.claude/.credentials.json -> ${USER_HOME}/.claude/.credentials.json (rw)" >&2
-    echo "[aisb:claude:debug] claude repo config: $CLAUDE_DIR/claude.json -> ${USER_HOME}/.claude.json (rw)" >&2
+    echo "[aisb:claude:debug] claude home: $CLAUDE_HOME_DIR -> ${USER_HOME} (rw)" >&2
+    echo "[aisb:claude:debug] claude repo config: $CLAUDE_HOME_DIR/.claude.json -> ${USER_HOME}/.claude.json (rw)" >&2
   fi
   if ((${#CLAUDE_FORWARDED_VARS[@]})); then
     echo "[aisb:claude] claude env: forwarding ${CLAUDE_FORWARDED_VARS[*]}" >&2

@@ -29,9 +29,10 @@ RUN echo "claude-code cache key: ${CLAUDE_VERSION}" \
       rm -rf /opt/claude-staging'
 
 # Claude's installer records installMethod=native and expects the binary at
-# $HOME/.local/bin/claude. Home is a per-run tmpfs, so materialize that
-# symlink on each start. Keep the real binary outside /usr/local/bin so
-# `claude doctor` doesn't flag it as a competing npm-global install.
+# $HOME/.local/bin/claude. Materialize that symlink on each start because
+# wrappers may mount a runtime home over the image's home directory. Keep the
+# real binary outside /usr/local/bin so `claude doctor` doesn't flag it as a
+# competing npm-global install.
 RUN printf '%s\n' \
       '#!/bin/sh' \
       'set -e' \

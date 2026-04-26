@@ -46,10 +46,10 @@ log_startup() {
   echo "[aisb:sb:debug] workspace mount: $ROOT -> $ROOT ($WORKSPACE_MOUNT_OPTS)" >&2
   echo "[aisb:sb:debug] mount /tmp: $TMP_DIR -> /tmp (bind rw,nosuid,nodev; host filesystem limit)" >&2
   echo "[aisb:sb:debug] mount /home/sb: tmpfs size=256m rw,nosuid,nodev" >&2
-  echo "[aisb:sb:debug] mount /uv-bin: tmpfs size=128m rw,nosuid,nodev" >&2
-  echo "[aisb:sb:debug] mount /uv-tools: tmpfs size=256m rw,nosuid,nodev" >&2
   echo "[aisb:sb:debug] mount uv cache: $UV_CACHE -> /uv-cache (bind rw,nosuid,nodev)" >&2
   echo "[aisb:sb:debug] mount uv python: $UV_PYTHON_DIR -> /uv-python (bind rw,nosuid,nodev)" >&2
+  echo "[aisb:sb:debug] mount uv tools: $UV_TOOL_DIR -> /uv-tools (bind rw,nosuid,nodev)" >&2
+  echo "[aisb:sb:debug] mount uv tool bin: $UV_TOOL_BIN_DIR -> /uv-bin (bind rw,nosuid,nodev)" >&2
   echo "[aisb:sb:debug] mount venv: $VENV_DIR -> /venv (bind rw,nosuid,nodev)" >&2
   if (( ${#REPO_VENV_MASK_OPTS[@]} > 0 )); then
     echo "[aisb:sb:debug] mask repo .venv: $REPO_VENV_MASK_DIR -> $REPO_VENV_PATH (bind rw,nosuid,nodev)" >&2
@@ -101,7 +101,9 @@ CACHE_BASE="${XDG_CACHE_HOME:-$HOME/.cache}/claude-podman"
 STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/claude-podman"
 UV_CACHE="${CACHE_BASE}/uv/${HASH}"
 UV_PYTHON_DIR="${STATE_BASE}/uv-python/${HASH}"
-VENV_DIR="${STATE_BASE}/venvs/${HASH}/${STAMP}-$$"
+UV_TOOL_DIR="${STATE_BASE}/uv-tools/${HASH}"
+UV_TOOL_BIN_DIR="${STATE_BASE}/uv-bin/${HASH}"
+VENV_DIR="${STATE_BASE}/venvs/${HASH}"
 TMP_DIR="${STATE_BASE}/sb/${HASH}/tmp/${STAMP}-$$"
 REPO_VENV_PATH="${ROOT}/.venv"
 REPO_VENV_MASK_DIR="${STATE_BASE}/sb/${HASH}/repo-venv-masks/${STAMP}-$$"
@@ -115,6 +117,10 @@ common_require_mount_path "$UV_CACHE" "uv cache source path"
 common_require_mount_path "/uv-cache" "uv cache destination path"
 common_require_mount_path "$UV_PYTHON_DIR" "uv python source path"
 common_require_mount_path "/uv-python" "uv python destination path"
+common_require_mount_path "$UV_TOOL_DIR" "uv tools source path"
+common_require_mount_path "/uv-tools" "uv tools destination path"
+common_require_mount_path "$UV_TOOL_BIN_DIR" "uv tool bin source path"
+common_require_mount_path "/uv-bin" "uv tool bin destination path"
 common_require_mount_path "$VENV_DIR" "venv source path"
 common_require_mount_path "/venv" "venv destination path"
 common_require_mount_path "$REPO_VENV_PATH" "repo .venv destination path"
@@ -137,10 +143,9 @@ if [[ -d "$REPO_VENV_PATH" ]]; then
   )
 fi
 
-mkdir -p "$UV_CACHE" "$UV_PYTHON_DIR" "$VENV_DIR" "$TMP_DIR" "$REPO_VENV_MASK_DIR"
+mkdir -p "$UV_CACHE" "$UV_PYTHON_DIR" "$UV_TOOL_DIR" "$UV_TOOL_BIN_DIR" "$VENV_DIR" "$TMP_DIR" "$REPO_VENV_MASK_DIR"
 chmod 1777 "$TMP_DIR"
 
-common_prune_old_dirs "${STATE_BASE}/venvs/${HASH}" "$STATE_BASE" -mtime +7
 common_prune_old_dirs "${STATE_BASE}/sb/${HASH}/repo-venv-masks" "$STATE_BASE" -mtime +7
 common_prune_old_dirs "${STATE_BASE}/sb/${HASH}/tmp" "$STATE_BASE" -mmin +1440
 
@@ -246,8 +251,6 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   "${NET_OPTS[@]}" \
   "${SECCOMP_OPTS[@]}" \
   --tmpfs /home/sb:rw,nosuid,nodev,size=256m,mode=1777 \
-  --tmpfs /uv-bin:rw,nosuid,nodev,size=128m,mode=1777 \
-  --tmpfs /uv-tools:rw,nosuid,nodev,size=256m,mode=1777 \
   --label "io.aisb.repo=$ROOT" \
   --label "io.aisb.repo_hash=$HASH" \
   --label "io.aisb.session=$STAMP-$$" \
@@ -259,6 +262,8 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   -e TEMP=/tmp \
   -e UV_CACHE_DIR=/uv-cache \
   -e UV_PYTHON_INSTALL_DIR=/uv-python \
+  -e UV_TOOL_DIR=/uv-tools \
+  -e UV_TOOL_BIN_DIR=/uv-bin \
   -e UV_PROJECT_ENVIRONMENT=/venv \
   -e MPLCONFIGDIR=/tmp/mpl \
   -e XDG_CONFIG_HOME=/tmp/xdg-config \
@@ -270,6 +275,8 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   -v "$TMP_DIR":/tmp:rw,nosuid,nodev,Z \
   -v "$UV_CACHE":/uv-cache:rw,nosuid,nodev,z \
   -v "$UV_PYTHON_DIR":/uv-python:rw,nosuid,nodev,z \
+  -v "$UV_TOOL_DIR":/uv-tools:rw,nosuid,nodev,z \
+  -v "$UV_TOOL_BIN_DIR":/uv-bin:rw,nosuid,nodev,z \
   -v "$VENV_DIR":/venv:rw,nosuid,nodev,Z \
   -w "$ROOT" \
   "$IMAGE" \

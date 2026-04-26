@@ -10,7 +10,8 @@
 #   ROOT, BASE, HASH, STAMP, NAME
 #   CACHE_BASE, STATE_BASE
 #   WORKSPACE_CACHE_DIR, WORKSPACE_STATE_DIR, WORKSPACE_UV_CACHE_DIR,
-#   WORKSPACE_UV_PYTHON_DIR, WORKSPACE_VENV_DIR, WORKSPACE_PYTEST_CACHE_DIR,
+#   WORKSPACE_UV_PYTHON_DIR, WORKSPACE_UV_TOOL_DIR, WORKSPACE_UV_TOOL_BIN_DIR,
+#   WORKSPACE_VENV_DIR, WORKSPACE_PYTEST_CACHE_DIR,
 #   WORKSPACE_TMP_DIR, WORKSPACE_REPO_VENV_PATH, WORKSPACE_REPO_VENV_MASK_DIR
 #   AUTH_MODE, REPO_MODE
 #   COMMON_PODMAN_ARGS (all shared podman flags: base hardening, tty, gh
@@ -40,13 +41,18 @@ common_log_startup() {
   echo "[aisb:${TOOL}:debug] workspace mount: $ROOT -> $ROOT ($WORKSPACE_MOUNT_OPTS)" >&2
   echo "[aisb:${TOOL}:debug] auth/repo mode: auth=$AUTH_MODE repo=$REPO_MODE" >&2
   echo "[aisb:${TOOL}:debug] mount /tmp: $WORKSPACE_TMP_DIR -> /tmp (bind rw,nosuid,nodev; host filesystem limit)" >&2
-  echo "[aisb:${TOOL}:debug] mount ${USER_HOME}: tmpfs size=256m rw,nosuid,nodev" >&2
-  echo "[aisb:${TOOL}:debug] mount /uv-bin: tmpfs size=128m rw,nosuid,nodev" >&2
-  echo "[aisb:${TOOL}:debug] mount /uv-tools: tmpfs size=256m rw,nosuid,nodev" >&2
+  if [[ "${AISB_MOUNT_USER_HOME_TMPFS:-1}" == "1" ]]; then
+    echo "[aisb:${TOOL}:debug] mount ${USER_HOME}: tmpfs size=256m rw,nosuid,nodev" >&2
+  fi
+  if [[ "${AISB_MOUNT_USER_HOME_TMPFS:-1}" == "1" ]]; then
+    echo "[aisb:${TOOL}:debug] mount ${USER_HOME}/.config: tmpfs size=64m rw,nosuid,nodev" >&2
+  fi
   echo "[aisb:${TOOL}:debug] mount cache: $WORKSPACE_CACHE_DIR -> /aisb-${TOOL}/cache (bind rw,nosuid,nodev)" >&2
   echo "[aisb:${TOOL}:debug] mount state: $WORKSPACE_STATE_DIR -> /aisb-${TOOL}/state (bind rw,nosuid,nodev)" >&2
   echo "[aisb:${TOOL}:debug] mount uv cache: $WORKSPACE_UV_CACHE_DIR -> /aisb-${TOOL}/uv-cache (bind rw,nosuid,nodev)" >&2
   echo "[aisb:${TOOL}:debug] mount uv python: $WORKSPACE_UV_PYTHON_DIR -> /aisb-${TOOL}/uv-python (bind rw,nosuid,nodev)" >&2
+  echo "[aisb:${TOOL}:debug] mount uv tools: $WORKSPACE_UV_TOOL_DIR -> /uv-tools (bind rw,nosuid,nodev)" >&2
+  echo "[aisb:${TOOL}:debug] mount uv tool bin: $WORKSPACE_UV_TOOL_BIN_DIR -> /uv-bin (bind rw,nosuid,nodev)" >&2
   echo "[aisb:${TOOL}:debug] mount venv: $WORKSPACE_VENV_DIR -> /aisb-${TOOL}/venv (bind rw,nosuid,nodev)" >&2
   if (( ${#WORKSPACE_REPO_VENV_MASK_ARGS[@]} > 0 )); then
     echo "[aisb:${TOOL}:debug] mask repo .venv: $WORKSPACE_REPO_VENV_MASK_DIR -> $WORKSPACE_REPO_VENV_PATH (bind rw,nosuid,nodev)" >&2
@@ -181,7 +187,9 @@ common_init() {
   WORKSPACE_STATE_DIR="${STATE_BASE}/${TOOL}/${HASH}/state"
   WORKSPACE_UV_CACHE_DIR="${CACHE_BASE}/uv/${HASH}"
   WORKSPACE_UV_PYTHON_DIR="${STATE_BASE}/${TOOL}/${HASH}/uv-python"
-  WORKSPACE_VENV_DIR="${STATE_BASE}/${TOOL}/${HASH}/venvs/${STAMP}-$$"
+  WORKSPACE_UV_TOOL_DIR="${STATE_BASE}/${TOOL}/${HASH}/uv-tools"
+  WORKSPACE_UV_TOOL_BIN_DIR="${STATE_BASE}/${TOOL}/${HASH}/uv-bin"
+  WORKSPACE_VENV_DIR="${STATE_BASE}/${TOOL}/${HASH}/venv"
   WORKSPACE_PYTEST_CACHE_DIR="${STATE_BASE}/${TOOL}/${HASH}/pytest"
   WORKSPACE_TMP_DIR="${STATE_BASE}/${TOOL}/${HASH}/tmp/${STAMP}-$$"
   WORKSPACE_REPO_VENV_PATH="${ROOT}/.venv"
@@ -196,13 +204,14 @@ common_init() {
     "$WORKSPACE_STATE_DIR" \
     "$WORKSPACE_UV_CACHE_DIR" \
     "$WORKSPACE_UV_PYTHON_DIR" \
+    "$WORKSPACE_UV_TOOL_DIR" \
+    "$WORKSPACE_UV_TOOL_BIN_DIR" \
     "$WORKSPACE_VENV_DIR" \
     "$WORKSPACE_PYTEST_CACHE_DIR" \
     "$WORKSPACE_TMP_DIR" \
     "$WORKSPACE_REPO_VENV_MASK_DIR"
   chmod 1777 "$WORKSPACE_TMP_DIR"
 
-  common_prune_old_dirs "${STATE_BASE}/${TOOL}/${HASH}/venvs" "$STATE_BASE" -mtime +7
   common_prune_old_dirs "${STATE_BASE}/${TOOL}/${HASH}/repo-venv-masks" "$STATE_BASE" -mtime +7
   common_prune_old_dirs "${STATE_BASE}/${TOOL}/${HASH}/tmp" "$STATE_BASE" -mmin +1440
 
@@ -254,9 +263,6 @@ common_init() {
     --memory="$AISB_MEMORY"
     --cpus="$AISB_CPUS"
     --pids-limit="$AISB_PIDS"
-    --tmpfs "${USER_HOME}:rw,nosuid,nodev,size=256m"
-    --tmpfs "/uv-bin:rw,nosuid,nodev,size=128m"
-    --tmpfs "/uv-tools:rw,nosuid,nodev,size=256m"
     --label "io.${TOOL}.repo=$ROOT"
     --label "io.${TOOL}.repo_hash=$HASH"
     --label "io.${TOOL}.session=$STAMP-$$"
@@ -278,6 +284,8 @@ common_init() {
     -e "XDG_STATE_HOME=/aisb-${TOOL}/state"
     -e "UV_CACHE_DIR=/aisb-${TOOL}/uv-cache"
     -e "UV_PYTHON_INSTALL_DIR=/aisb-${TOOL}/uv-python"
+    -e "UV_TOOL_DIR=/uv-tools"
+    -e "UV_TOOL_BIN_DIR=/uv-bin"
     -e "UV_PROJECT_ENVIRONMENT=/aisb-${TOOL}/venv"
     -e "PYTEST_ADDOPTS=${PYTEST_ADDOPTS:-} -o cache_dir=/aisb-${TOOL}/pytest"
     -v "${ROOT}:${ROOT}:${WORKSPACE_MOUNT_OPTS}"
@@ -287,10 +295,19 @@ common_init() {
     -v "${WORKSPACE_STATE_DIR}:/aisb-${TOOL}/state:rw,nosuid,nodev,z"
     -v "${WORKSPACE_UV_CACHE_DIR}:/aisb-${TOOL}/uv-cache:rw,nosuid,nodev,z"
     -v "${WORKSPACE_UV_PYTHON_DIR}:/aisb-${TOOL}/uv-python:rw,nosuid,nodev,z"
+    -v "${WORKSPACE_UV_TOOL_DIR}:/uv-tools:rw,nosuid,nodev,z"
+    -v "${WORKSPACE_UV_TOOL_BIN_DIR}:/uv-bin:rw,nosuid,nodev,z"
     -v "${WORKSPACE_VENV_DIR}:/aisb-${TOOL}/venv:rw,nosuid,nodev,Z"
     -v "${WORKSPACE_PYTEST_CACHE_DIR}:/aisb-${TOOL}/pytest:rw,nosuid,nodev,z"
     -w "$ROOT"
   )
+
+  if [[ "${AISB_MOUNT_USER_HOME_TMPFS:-1}" == "1" ]]; then
+    COMMON_PODMAN_ARGS+=(
+      --tmpfs "${USER_HOME}:rw,nosuid,nodev,size=256m"
+      --tmpfs "${USER_HOME}/.config:rw,nosuid,nodev,size=64m"
+    )
+  fi
 
   _common_append_tty
   _common_append_gh

@@ -57,13 +57,13 @@ The wrappers:
   where the agent should not mutate the repo.
 - forward API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `TOGETHER_API_KEY`, …) and `gh` auth
-- mount Claude's host config directory (`~/.claude`) and Codex's host config
-  directory (`~/.codex`) read-write so login, token refresh, and atomic config
-  writes persist normally. `~/.claude.json` remains repo-scoped. `gh` config is
+- mount Claude, Codex, and PI per-repo homes read-write so login, token
+  refresh, MCP changes, and atomic config writes persist normally. Agent homes
+  are seeded from host dotfiles on first use, then kept under AISB state. `gh` config is
   mounted **read-only** in normal runs. On SELinux hosts, wrappers ask before
   relabeling the specific auth/config paths needed for container access.
-- keep durable per-repo runtime state (repo-scoped config, logs, sessions,
-  venvs, uv caches) under `$XDG_STATE_HOME/claude-podman/` and
+- keep durable per-repo runtime state (agent homes, repo-scoped config, logs,
+  sessions, venvs, uv caches) under `$XDG_STATE_HOME/claude-podman/` and
   `$XDG_CACHE_HOME/claude-podman/` — survives container removal and image
   rebuilds
 - mask an existing repo `.venv` directory with an empty per-run mount so the
@@ -100,8 +100,8 @@ Every container runs with:
 
 - `--userns=keep-id` (no root-in-container)
 - `--cap-drop=all` + `--security-opt no-new-privileges`
-- `--read-only` rootfs with host-backed per-invocation `/tmp` and tmpfs for
-  `/home/<user>`, `/uv-bin`, `/uv-tools`
+- `--read-only` rootfs with host-backed per-invocation `/tmp`; `sb` also gets
+  a tmpfs home for non-durable shell/config scratch
 - Mounts tagged `nosuid,nodev`
 - One container per invocation (`--rm`), unique `--name` per session
 - Resource caps: `--memory`, `--cpus`, `--pids-limit` (overridable via
@@ -271,9 +271,9 @@ Derived tool images install a shared agent toolbox on top of the repo base,
 without changing the repo base image itself. The `codex` and `pi` images also
 install Node.js/npm in their own image before installing their CLI packages.
 The shared toolbox includes `prek`, installed to `/usr/local/bin` so it remains
-available even when wrappers mount runtime tmpfs paths such as `/uv-bin`. This
-requires the repo base to have one supported package manager: `microdnf`,
-`dnf`, `apt-get`, or `apk`.
+available independently of wrapper-managed uv tool directories. This requires
+the repo base to have one supported package manager: `microdnf`, `dnf`,
+`apt-get`, or `apk`.
 
 Build smoke-test checklist for repo-derived images:
 
