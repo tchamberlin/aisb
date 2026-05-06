@@ -501,6 +501,7 @@ common_maybe_prompt_workspace_container_readable() {
   context="$(common_selinux_context "$ROOT")"
   if common_selinux_context_is_container "$context"; then
     common_remember_workspace_container_readable
+    AISB_RELABEL_WORKSPACE=1
     return 0
   fi
 
