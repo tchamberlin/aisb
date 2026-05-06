@@ -43,11 +43,11 @@ fi
 
 common_check_image
 
-# Pi state lives in a repo-scoped durable home. Seed any host-side state on
-# first use, then let the container own that per-repo copy.
+# Pi state lives in a shared durable home. Seed any host-side state on
+# first use, then let the container own that shared copy across all repos.
 mkdir -p "$HOME/.pi/agent"
 
-PI_HOME_DIR="${STATE_BASE}/pi/${HASH}/home-pi"
+PI_HOME_DIR="${STATE_BASE}/pi/home-pi"
 mkdir -p "$PI_HOME_DIR"
 if [[ ! -e "$PI_HOME_DIR/.pi" ]]; then
   cp -a "$HOME/.pi" "$PI_HOME_DIR/.pi"

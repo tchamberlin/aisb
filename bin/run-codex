@@ -17,17 +17,17 @@ AISB_MOUNT_USER_HOME_TMPFS=0
 source "$SCRIPT_DIR/_run-common.sh"
 common_init
 
-CODEX_HOME_DIR="${STATE_BASE}/codex/${HASH}/home-codex"
+CODEX_HOME_DIR="${STATE_BASE}/codex/home-codex"
 mkdir -p "$CODEX_HOME_DIR"
 
-common_require_mount_path "${CODEX_HOME_DIR}" "Codex repo home source path"
-common_require_mount_path "${CODEX_HOME_DIR}/.codex" "Codex repo config source path"
+common_require_mount_path "${CODEX_HOME_DIR}" "Codex shared home source path"
+common_require_mount_path "${CODEX_HOME_DIR}/.codex" "Codex shared config source path"
 
 common_check_image
 common_maybe_warn_tool_update
 
-# Seed per-repo Codex home from host config on first use. After that, Codex
-# state belongs to this repo-scoped durable home and survives container removal.
+# Seed shared Codex home from host config on first use. After that, Codex
+# state lives in this shared durable home and survives container removal.
 mkdir -p "$HOME/.codex"
 common_ensure_json_object_file "$HOME/.codex/auth.json" "Codex auth"
 touch "$HOME/.codex/config.toml"
@@ -35,7 +35,7 @@ if [[ ! -e "$CODEX_HOME_DIR/.codex" ]]; then
   cp -a "$HOME/.codex" "$CODEX_HOME_DIR/.codex"
 fi
 mkdir -p "$CODEX_HOME_DIR/.codex"
-common_ensure_json_object_file "$CODEX_HOME_DIR/.codex/auth.json" "Codex repo auth"
+common_ensure_json_object_file "$CODEX_HOME_DIR/.codex/auth.json" "Codex shared auth"
 touch "$CODEX_HOME_DIR/.codex/config.toml"
 
 TOOL_MOUNTS=(

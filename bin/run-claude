@@ -32,14 +32,14 @@ common_ensure_json_object_file "$HOME/.claude.json" "Claude host config"
 common_ensure_json_object_file "$HOME/.claude/.credentials.json" "Claude credentials"
 common_ensure_json_object_file "$HOME/.claude/settings.json" "Claude settings"
 
-CLAUDE_HOME_DIR="${STATE_BASE}/claude/${HASH}/home-claude"
+CLAUDE_HOME_DIR="${STATE_BASE}/claude/home-claude"
 mkdir -p "$CLAUDE_HOME_DIR"
 
-common_require_mount_path "${CLAUDE_HOME_DIR}" "Claude repo home source path"
-common_require_mount_path "${CLAUDE_HOME_DIR}/.claude" "Claude repo state source path"
-common_require_mount_path "${CLAUDE_HOME_DIR}/.claude.json" "Claude repo config source path"
-common_require_mount_path "${CLAUDE_HOME_DIR}/.claude/settings.json" "Claude repo settings source path"
-common_require_mount_path "${CLAUDE_HOME_DIR}/.claude/.credentials.json" "Claude repo credentials source path"
+common_require_mount_path "${CLAUDE_HOME_DIR}" "Claude shared home source path"
+common_require_mount_path "${CLAUDE_HOME_DIR}/.claude" "Claude shared state source path"
+common_require_mount_path "${CLAUDE_HOME_DIR}/.claude.json" "Claude shared config source path"
+common_require_mount_path "${CLAUDE_HOME_DIR}/.claude/settings.json" "Claude shared settings source path"
+common_require_mount_path "${CLAUDE_HOME_DIR}/.claude/.credentials.json" "Claude shared credentials source path"
 
 claude_project_mcp_json_is_usable() {
   [[ -f "$ROOT/.mcp.json" && -r "$ROOT/.mcp.json" ]]
@@ -68,38 +68,6 @@ claude_check_project_mcp_json() {
   echo "On SELinux hosts, fix the label or rerun once with workspace relabeling enabled:" >&2
   echo "  AISB_RELABEL_WORKSPACE=1 claude" >&2
   exit 1
-}
-
-claude_scope_repo_config() {
-  local config_path="$1"
-  local tmp
-
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "[aisb:claude] warning: jq not found; cannot scope Claude project config" >&2
-    return 0
-  fi
-
-  tmp="$(mktemp "${config_path}.tmp.XXXXXX")"
-  if ! jq --arg root "$ROOT" '
-    if (.projects? | type) == "object" then
-      .projects = (
-        if .projects[$root] == null then
-          {}
-        else
-          {($root): .projects[$root]}
-        end
-      )
-    else
-      .
-    end
-  ' "$config_path" > "$tmp"; then
-    rm -f "$tmp"
-    echo "Error: Claude repo config is not valid JSON: $config_path" >&2
-    exit 1
-  fi
-
-  chmod --reference="$config_path" "$tmp" 2>/dev/null || chmod 0600 "$tmp"
-  mv "$tmp" "$config_path"
 }
 
 claude_preflight_workspace_mount() {
@@ -161,29 +129,25 @@ if [[ ! -d "$CLAUDE_HOME_DIR/.claude" && ( -e "$CLAUDE_HOME_DIR/settings.json" |
 fi
 mkdir -p "$CLAUDE_HOME_DIR/.claude"
 
-# Seed per-repo Claude state from host on first run, else create empty
+# Seed shared Claude state from host on first run, else create empty
 # placeholders so directory-level mounts preserve Claude's atomic rewrites.
 if [[ ! -e "$CLAUDE_HOME_DIR/.claude.json" ]]; then
-  if [[ -s "${STATE_BASE}/claude/${HASH}/dot-claude/claude.json" ]]; then
-    cp -p "${STATE_BASE}/claude/${HASH}/dot-claude/claude.json" "$CLAUDE_HOME_DIR/.claude.json"
-  elif [[ -s "$HOME/.claude.json" ]]; then
+  if [[ -s "$HOME/.claude.json" ]]; then
     cp -p "$HOME/.claude.json" "$CLAUDE_HOME_DIR/.claude.json"
   else
-    common_ensure_json_object_file "$CLAUDE_HOME_DIR/.claude.json" "Claude repo config"
+    common_ensure_json_object_file "$CLAUDE_HOME_DIR/.claude.json" "Claude shared config"
   fi
 fi
-common_ensure_json_object_file "$CLAUDE_HOME_DIR/.claude.json" "Claude repo config"
+common_ensure_json_object_file "$CLAUDE_HOME_DIR/.claude.json" "Claude shared config"
 if [[ ! -e "$CLAUDE_HOME_DIR/.claude/settings.json" ]]; then
   cp -p "$HOME/.claude/settings.json" "$CLAUDE_HOME_DIR/.claude/settings.json"
 fi
-common_ensure_json_object_file "$CLAUDE_HOME_DIR/.claude/settings.json" "Claude repo settings"
+common_ensure_json_object_file "$CLAUDE_HOME_DIR/.claude/settings.json" "Claude shared settings"
 if [[ ! -e "$CLAUDE_HOME_DIR/.claude/.credentials.json" ]]; then
   cp -p "$HOME/.claude/.credentials.json" "$CLAUDE_HOME_DIR/.claude/.credentials.json"
 fi
-common_ensure_json_object_file "$CLAUDE_HOME_DIR/.claude/.credentials.json" "Claude repo credentials"
+common_ensure_json_object_file "$CLAUDE_HOME_DIR/.claude/.credentials.json" "Claude shared credentials"
 claude_check_project_mcp_json
-claude_scope_repo_config "$CLAUDE_HOME_DIR/.claude.json"
-claude_scope_repo_config "$CLAUDE_HOME_DIR/.claude/settings.json"
 claude_preflight_workspace_mount
 
 TOOL_MOUNTS=(
@@ -212,8 +176,8 @@ CLAUDE_OPTS+=(
 
 if [[ "${AISB_QUIET:-0}" != "1" ]]; then
   if [[ "${AISB_DEBUG:-0}" == "1" ]]; then
-    echo "[aisb:claude:debug] claude home: $CLAUDE_HOME_DIR -> ${USER_HOME} (rw)" >&2
-    echo "[aisb:claude:debug] claude repo config: $CLAUDE_HOME_DIR/.claude.json -> ${USER_HOME}/.claude.json (rw)" >&2
+    echo "[aisb:claude:debug] claude home: $CLAUDE_HOME_DIR -> ${USER_HOME} (rw, shared across repos)" >&2
+    echo "[aisb:claude:debug] claude shared config: $CLAUDE_HOME_DIR/.claude.json -> ${USER_HOME}/.claude.json (rw)" >&2
   fi
   if ((${#CLAUDE_FORWARDED_VARS[@]})); then
     echo "[aisb:claude] claude env: forwarding ${CLAUDE_FORWARDED_VARS[*]}" >&2

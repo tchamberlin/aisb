@@ -57,15 +57,17 @@ The wrappers:
   where the agent should not mutate the repo.
 - forward API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `TOGETHER_API_KEY`, …) and `gh` auth
-- mount Claude, Codex, and PI per-repo homes read-write so login, token
-  refresh, MCP changes, and atomic config writes persist normally. Agent homes
-  are seeded from host dotfiles on first use, then kept under AISB state. `gh` config is
-  mounted **read-only** in normal runs. On SELinux hosts, wrappers ask before
-  relabeling the specific auth/config paths needed for container access.
-- keep durable per-repo runtime state (agent homes, repo-scoped config, logs,
-  sessions, venvs, uv caches) under `$XDG_STATE_HOME/claude-podman/` and
-  `$XDG_CACHE_HOME/claude-podman/` — survives container removal and image
-  rebuilds
+- mount Claude, Codex, and PI shared homes read-write so login, token
+  refresh, MCP changes, and atomic config writes persist normally and a single
+  login carries across every repo. Agent homes are seeded from host dotfiles on
+  first use, then kept under AISB state. `gh` config is mounted **read-only**
+  in normal runs. On SELinux hosts, wrappers ask before relabeling the specific
+  auth/config paths needed for container access.
+- keep durable runtime state under `$XDG_STATE_HOME/claude-podman/` and
+  `$XDG_CACHE_HOME/claude-podman/` — agent homes (auth, settings, MCP, sessions)
+  are shared across all repos so a single login persists everywhere; per-repo
+  state (workspace caches, venvs, uv caches, logs) stays scoped by repo hash.
+  Both survive container removal and image rebuilds
 - mask an existing repo `.venv` directory with an empty per-run mount so the
   container cannot read or mutate the host virtualenv. Python tooling should use
   the wrapper-managed uv environment (`/aisb-<tool>/venv` for agents, `/venv`
