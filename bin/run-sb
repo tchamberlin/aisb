@@ -51,6 +51,7 @@ log_startup() {
   echo "[aisb:sb:debug] mount uv tools: $UV_TOOL_DIR -> /uv-tools (bind rw,nosuid,nodev)" >&2
   echo "[aisb:sb:debug] mount uv tool bin: $UV_TOOL_BIN_DIR -> /uv-bin (bind rw,nosuid,nodev)" >&2
   echo "[aisb:sb:debug] mount venv: $VENV_DIR -> /venv (bind rw,nosuid,nodev)" >&2
+  echo "[aisb:sb:debug] mount agents: $HOME/.agents -> /home/sb/.agents (bind ro,nosuid,nodev,noexec)" >&2
   if (( ${#REPO_VENV_MASK_OPTS[@]} > 0 )); then
     echo "[aisb:sb:debug] mask repo .venv: $REPO_VENV_MASK_DIR -> $REPO_VENV_PATH (bind rw,nosuid,nodev)" >&2
   else
@@ -175,6 +176,12 @@ if [[ -d "$GH_HOST_CONFIG" ]]; then
   GH_OPTS+=(-v "${GH_HOST_CONFIG}:/home/sb/.config/gh:ro,nosuid,nodev,noexec")
 fi
 
+AGENTS_HOST="$HOME/.agents"
+mkdir -p "$AGENTS_HOST"
+common_require_mount_path "$AGENTS_HOST" "agents config source path"
+common_require_mount_path "/home/sb/.agents" "agents config destination path"
+AGENTS_OPTS=(-v "${AGENTS_HOST}:/home/sb/.agents:ro,nosuid,nodev,noexec,z")
+
 common_check_image
 
 # Interactive only if stdin is a tty
@@ -270,6 +277,7 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   -e XDG_CACHE_HOME=/tmp/xdg-cache \
   "${ENV_OPTS[@]}" \
   "${GH_OPTS[@]}" \
+  "${AGENTS_OPTS[@]}" \
   -v "$ROOT":"$ROOT":"$WORKSPACE_MOUNT_OPTS" \
   "${REPO_VENV_MASK_OPTS[@]}" \
   -v "$TMP_DIR":/tmp:rw,nosuid,nodev,Z \

@@ -154,6 +154,13 @@ TOOL_MOUNTS=(
   -v "${CLAUDE_HOME_DIR}:${USER_HOME}:rw,nosuid,nodev,noexec,z"
 )
 
+CLAUDE_SKILLS_HOST="$HOME/.claude/skills"
+if [[ -d "$CLAUDE_SKILLS_HOST" ]]; then
+  common_require_mount_path "$CLAUDE_SKILLS_HOST" "Claude skills source path"
+  common_require_mount_path "${USER_HOME}/.claude/skills" "Claude skills destination path"
+  TOOL_MOUNTS+=(-v "${CLAUDE_SKILLS_HOST}:${USER_HOME}/.claude/skills:ro,nosuid,nodev,noexec,z")
+fi
+
 CLAUDE_FLAGS=()
 if [[ "${CLAUDE_SAFE_MODE:-0}" != "1" ]]; then
   CLAUDE_FLAGS+=(--dangerously-skip-permissions)

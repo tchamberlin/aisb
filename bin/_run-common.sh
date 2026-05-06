@@ -60,6 +60,7 @@ common_log_startup() {
     echo "[aisb:${TOOL}:debug] mask repo .venv: not present" >&2
   fi
   echo "[aisb:${TOOL}:debug] mount pytest cache: $WORKSPACE_PYTEST_CACHE_DIR -> /aisb-${TOOL}/pytest (bind rw,nosuid,nodev)" >&2
+  echo "[aisb:${TOOL}:debug] mount agents: ${HOME}/.agents -> ${USER_HOME}/.agents (bind ro,nosuid,nodev,noexec)" >&2
 
   if [[ "${AISB_RELABEL_WORKSPACE:-0}" == "1" ]]; then
     echo "[aisb:${TOOL}:debug] workspace relabel: enabled" >&2
@@ -311,6 +312,7 @@ common_init() {
 
   _common_append_tty
   _common_append_gh
+  _common_append_agents
   _common_append_seccomp
   common_log_startup
 }
@@ -831,6 +833,14 @@ _common_append_gh() {
     common_require_mount_path "${USER_HOME}/.config/gh" "GitHub CLI config destination path"
     COMMON_PODMAN_ARGS+=(-v "${gh_host_config}:${USER_HOME}/.config/gh:${AUTH_MODE},nosuid,nodev,noexec")
   fi
+}
+
+_common_append_agents() {
+  local agents_host="${HOME}/.agents"
+  mkdir -p "$agents_host"
+  common_require_mount_path "$agents_host" "agents config source path"
+  common_require_mount_path "${USER_HOME}/.agents" "agents config destination path"
+  COMMON_PODMAN_ARGS+=(-v "${agents_host}:${USER_HOME}/.agents:ro,nosuid,nodev,noexec,z")
 }
 
 _common_append_tty() {

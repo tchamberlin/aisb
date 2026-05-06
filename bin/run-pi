@@ -65,6 +65,13 @@ if [[ "$PROJECT_MODELS_ENABLED" == "1" ]]; then
   TOOL_MOUNTS+=(-v "${PROJECT_MODELS}:${USER_HOME}/.pi/agent/models.json:${PROJECT_MODELS_OPTS}")
 fi
 
+PI_SKILLS_HOST="$HOME/.pi/skills"
+if [[ -d "$PI_SKILLS_HOST" ]]; then
+  common_require_mount_path "$PI_SKILLS_HOST" "pi skills source path"
+  common_require_mount_path "${USER_HOME}/.pi/skills" "pi skills destination path"
+  TOOL_MOUNTS+=(-v "${PI_SKILLS_HOST}:${USER_HOME}/.pi/skills:ro,nosuid,nodev,noexec,z")
+fi
+
 # Optional central env file: pi has no login flow, so API keys for its five
 # supported providers are the only auth path. Source a user-owned file so the
 # keys are available regardless of the calling shell.
