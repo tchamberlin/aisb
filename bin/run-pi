@@ -65,10 +65,56 @@ if [[ "$PROJECT_MODELS_ENABLED" == "1" ]]; then
   TOOL_MOUNTS+=(-v "${PROJECT_MODELS}:${USER_HOME}/.pi/agent/models.json:${PROJECT_MODELS_OPTS}")
 fi
 
+# Optional central env file: pi has no login flow, so API keys for its five
+# supported providers are the only auth path. Source a user-owned file so the
+# keys are available regardless of the calling shell.
+PI_ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/aisb/pi.env"
+PI_ENV_FILE_LOADED=0
+PI_ENV_FILE_VARS=()
+if [[ -L "$PI_ENV_FILE" ]]; then
+  echo "Error: refusing symlinked pi env file: $PI_ENV_FILE" >&2
+  exit 1
+fi
+if [[ -e "$PI_ENV_FILE" ]]; then
+  if [[ ! -f "$PI_ENV_FILE" ]]; then
+    echo "Error: pi env file is not a regular file: $PI_ENV_FILE" >&2
+    exit 1
+  fi
+  pi_env_mode="$(stat -c '%a' "$PI_ENV_FILE" 2>/dev/null || echo "")"
+  if [[ ! "$pi_env_mode" =~ ^[0-9]*00$ ]]; then
+    echo "Error: pi env file is group/other accessible: $PI_ENV_FILE (mode $pi_env_mode)" >&2
+    echo "Run: chmod 600 '$PI_ENV_FILE'" >&2
+    exit 1
+  fi
+  set -a
+  # shellcheck disable=SC1090
+  source "$PI_ENV_FILE"
+  set +a
+  # Collect names assigned at the start of a line (KEY=... or export KEY=...).
+  # This is what gets forwarded — predictable from reading the file.
+  mapfile -t PI_ENV_FILE_VARS < <(
+    awk '
+      /^[[:space:]]*#/ { next }
+      match($0, /^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/, m) { print m[2] }
+    ' "$PI_ENV_FILE" | awk '!seen[$0]++'
+  )
+  PI_ENV_FILE_LOADED=1
+fi
+
 # Forward API keys and editor preferences that pi reads
 PI_OPTS=()
 PI_FORWARDED_VARS=()
 for var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY TOGETHER_API_KEY PI_CODING_AGENT_DIR PI_TELEMETRY PI_CACHE_RETENTION PI_SKIP_VERSION_CHECK VISUAL EDITOR; do
+  if [[ -n "${!var:-}" ]]; then
+    PI_OPTS+=(-e "${var}=${!var}")
+    PI_FORWARDED_VARS+=("$var")
+  fi
+done
+
+# Also forward anything new that the env file introduced (e.g. provider keys
+# we don't know about yet, or per-provider base-url/model overrides).
+for var in "${PI_ENV_FILE_VARS[@]}"; do
+  case " ${PI_FORWARDED_VARS[*]} " in *" $var "*) continue ;; esac
   if [[ -n "${!var:-}" ]]; then
     PI_OPTS+=(-e "${var}=${!var}")
     PI_FORWARDED_VARS+=("$var")
@@ -81,6 +127,9 @@ if [[ "${AISB_QUIET:-0}" != "1" ]]; then
     echo "[aisb:pi] pi models: $PROJECT_MODELS (repo override)" >&2
   else
     echo "[aisb:pi] pi models: default" >&2
+  fi
+  if [[ "$PI_ENV_FILE_LOADED" == "1" ]]; then
+    echo "[aisb:pi] pi env file: $PI_ENV_FILE" >&2
   fi
   if ((${#PI_FORWARDED_VARS[@]})); then
     echo "[aisb:pi] pi env: forwarding ${PI_FORWARDED_VARS[*]}" >&2
