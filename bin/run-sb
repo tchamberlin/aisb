@@ -39,6 +39,13 @@ log_startup() {
   echo "[aisb:sb] repo config: $(aisb_repo_config_summary)" >&2
   echo "[aisb:sb] image: $IMAGE ($(aisb_tool_image_source_summary sb))" >&2
   echo "[aisb:sb] limits: memory=$AISB_MEMORY cpus=$AISB_CPUS pids=$AISB_PIDS" >&2
+  if (( ${#EXTRA_MOUNT_LINES[@]} > 0 )); then
+    echo "[aisb:sb] extra mounts: ${#EXTRA_MOUNT_LINES[@]} from ${AISB_REPO_ENV_FILE}" >&2
+    local _extra_line
+    for _extra_line in "${EXTRA_MOUNT_LINES[@]}"; do
+      echo "[aisb:sb]   $_extra_line" >&2
+    done
+  fi
 
   [[ "${AISB_DEBUG:-0}" == "1" ]] || return 0
 
@@ -182,6 +189,27 @@ common_require_mount_path "$AGENTS_HOST" "agents config source path"
 common_require_mount_path "/home/sb/.agents" "agents config destination path"
 AGENTS_OPTS=(-v "${AGENTS_HOST}:/home/sb/.agents:ro,nosuid,nodev,noexec,z")
 
+EXTRA_MOUNT_OPTS=()
+EXTRA_MOUNT_LINES=()
+if (( ${#AISB_REPO_EXTRA_MOUNTS[@]} > 0 )); then
+  SB_RESERVED_MOUNTS=(
+    "/home/sb"
+    "$ROOT"
+    "/uv-cache"
+    "/uv-python"
+    "/uv-tools"
+    "/uv-bin"
+    "/venv"
+    "/tmp"
+  )
+  for _entry in "${AISB_REPO_EXTRA_MOUNTS[@]}"; do
+    _resolved="$(aisb_extra_mount_resolve "$_entry" "$ROOT" "${SB_RESERVED_MOUNTS[@]}")"
+    IFS=$'\t' read -r _src _dst _opts <<< "$_resolved"
+    EXTRA_MOUNT_OPTS+=(-v "${_src}:${_dst}:${_opts}")
+    EXTRA_MOUNT_LINES+=("$_src -> $_dst ($_opts)")
+  done
+fi
+
 common_check_image
 
 # Interactive only if stdin is a tty
@@ -278,6 +306,7 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   "${ENV_OPTS[@]}" \
   "${GH_OPTS[@]}" \
   "${AGENTS_OPTS[@]}" \
+  "${EXTRA_MOUNT_OPTS[@]}" \
   -v "$ROOT":"$ROOT":"$WORKSPACE_MOUNT_OPTS" \
   "${REPO_VENV_MASK_OPTS[@]}" \
   -v "$TMP_DIR":/tmp:rw,nosuid,nodev,Z \

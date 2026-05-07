@@ -127,6 +127,10 @@ The wrappers fail closed for several host-mutation hazards:
   `.pi/agent/models.json` symlinks are refused
 - bind mount source or destination paths containing `:` are refused because
   Podman `-v` parsing would be ambiguous
+- `AISB_EXTRA_MOUNTS` entries from `.aisb.env` are validated before mounting:
+  broad host paths, symlinks, missing sources, paths inside the workspace,
+  reserved container paths, and unknown options are refused; mounts default
+  to `ro` and always include `nosuid,nodev`
 - `AISB_WORKSPACE_READONLY=1` mounts the workspace `ro,nosuid,nodev` for runs
   that should inspect rather than edit files
 - an existing repo `.venv` directory is hidden behind an empty per-run mount;
@@ -254,7 +258,34 @@ AISB_BASE_IMAGE=localhost/my-project-aisb-base:latest
 ```
 
 The file is parsed as data, not sourced as shell. Blank lines and comments are
-allowed; currently only `AISB_BASE_IMAGE` is recognized.
+allowed. Recognized keys:
+
+- `AISB_BASE_IMAGE` — base image tag (see above).
+- `AISB_EXTRA_MOUNTS` — extra host bind mounts. Each value is one or more
+  whitespace-separated entries; the key may also be repeated on multiple lines.
+  Each entry takes one of these forms:
+  - `/host/path` — mount at the same path inside the container
+  - `/host/path:opts` — same-path mount with custom options
+  - `/host/path:/container/path` — explicit mapping
+  - `/host/path:/container/path:opts` — mapping with options
+
+  Default options are `ro`; supported flags are `ro`, `rw`, `z`, `Z`, `noexec`.
+  The wrappers always force `nosuid,nodev` and reject:
+  - relative or `..`-bearing paths, paths containing `:`, `,`, or whitespace
+  - host paths that don't exist, are symlinks, sit inside the workspace, or
+    are broad locations like `/`, `$HOME`, `/etc`, `/tmp` (mount a narrower
+    subdirectory instead)
+  - container paths that overlap reserved mount points (`$ROOT`, the user
+    home, `/aisb-<tool>`, `/uv-tools`, `/uv-bin`, `/tmp`, and for `sb` the
+    `/uv-cache`, `/uv-python`, `/venv`, `/home/sb` paths)
+
+  Examples:
+
+  ```sh
+  AISB_EXTRA_MOUNTS=/home/foo /srv/datasets
+  AISB_EXTRA_MOUNTS=/var/tmp/scratch:rw
+  AISB_EXTRA_MOUNTS=/srv/cache:/data:rw
+  ```
 
 When a repo-specific base image is active:
 

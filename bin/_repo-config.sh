@@ -64,6 +64,8 @@ aisb_load_repo_env() {
   AISB_REPO_ENV_HAS_BASE_IMAGE=0
   AISB_REPO_CONTAINERFILE=""
   AISB_REPO_AUTO_BASE_IMAGE=""
+  # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
+  AISB_REPO_EXTRA_MOUNTS=()
 
   if [[ -L "$env_file" ]]; then
     echo "error: refusing symlinked repo config file: $env_file" >&2
@@ -109,6 +111,14 @@ aisb_load_repo_env() {
         AISB_REPO_BASE_IMAGE="$value"
         # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
         AISB_REPO_ENV_HAS_BASE_IMAGE=1
+        ;;
+      AISB_EXTRA_MOUNTS)
+        local _token
+        # Word-split on whitespace; each token is one mount entry.
+        # shellcheck disable=SC2206
+        for _token in $value; do
+          [[ -n "$_token" ]] && AISB_REPO_EXTRA_MOUNTS+=("$_token")
+        done
         ;;
       *)
         echo "warn: ignoring unsupported $env_file key '$key'" >&2

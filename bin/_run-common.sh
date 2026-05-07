@@ -34,6 +34,13 @@ common_log_startup() {
   echo "[aisb:${TOOL}] repo config: $(aisb_repo_config_summary)" >&2
   echo "[aisb:${TOOL}] image: $IMAGE ($(aisb_tool_image_source_summary "$TOOL"))" >&2
   echo "[aisb:${TOOL}] limits: memory=$AISB_MEMORY cpus=$AISB_CPUS pids=$AISB_PIDS" >&2
+  if (( ${#COMMON_EXTRA_MOUNT_LINES[@]} > 0 )); then
+    echo "[aisb:${TOOL}] extra mounts: ${#COMMON_EXTRA_MOUNT_LINES[@]} from ${AISB_REPO_ENV_FILE}" >&2
+    local _extra_mount_line
+    for _extra_mount_line in "${COMMON_EXTRA_MOUNT_LINES[@]}"; do
+      echo "[aisb:${TOOL}]   $_extra_mount_line" >&2
+    done
+  fi
 
   [[ "${AISB_DEBUG:-0}" == "1" ]] || return 0
 
@@ -313,6 +320,7 @@ common_init() {
   _common_append_tty
   _common_append_gh
   _common_append_agents
+  _common_append_extra_mounts
   _common_append_seccomp
   common_log_startup
 }
@@ -848,6 +856,162 @@ _common_append_tty() {
   if [[ -t 0 && -t 1 ]]; then
     COMMON_PODMAN_ARGS+=(-t)
   fi
+}
+
+aisb_extra_mount_normalize_opts() {
+  local raw="$1"
+  local mode="ro"
+  local mode_seen=0
+  local -a extra=()
+  local IFS=','
+  local -a parts
+  read -r -a parts <<< "$raw"
+  local p
+  for p in "${parts[@]}"; do
+    [[ -n "$p" ]] || continue
+    case "$p" in
+      ro|rw)
+        if (( mode_seen )) && [[ "$mode" != "$p" ]]; then
+          echo "Error: AISB_EXTRA_MOUNTS opts specify conflicting modes: $raw" >&2
+          exit 1
+        fi
+        mode_seen=1
+        mode="$p"
+        ;;
+      z|Z|noexec)
+        extra+=("$p")
+        ;;
+      nosuid|nodev)
+        ;;
+      *)
+        echo "Error: AISB_EXTRA_MOUNTS opts contain unsupported flag '$p' (allowed: ro,rw,z,Z,noexec)" >&2
+        exit 1
+        ;;
+    esac
+  done
+  local out="$mode,nosuid,nodev"
+  for p in "${extra[@]}"; do
+    out+=",${p}"
+  done
+  printf '%s' "$out"
+}
+
+aisb_extra_mount_resolve() {
+  local entry="$1"
+  local workspace_root="$2"
+  shift 2
+  local -a reserved=("$@")
+
+  local src dst opts
+  local f1 f2 f3 sentinel
+  IFS=':' read -r f1 f2 f3 sentinel <<< "$entry"
+  if [[ -n "${sentinel:-}" ]]; then
+    echo "Error: AISB_EXTRA_MOUNTS entry has too many ':' fields: $entry" >&2
+    echo "Expected: /host/path | /host:opts | /host:/container | /host:/container:opts" >&2
+    exit 1
+  fi
+  if [[ -z "${f1:-}" ]]; then
+    echo "Error: AISB_EXTRA_MOUNTS entry is empty" >&2
+    exit 1
+  fi
+
+  if [[ -z "${f2:-}" ]]; then
+    src="$f1"; dst="$f1"; opts=""
+  elif [[ "$f2" == /* ]]; then
+    src="$f1"; dst="$f2"; opts="${f3:-}"
+  else
+    if [[ -n "${f3:-}" ]]; then
+      echo "Error: AISB_EXTRA_MOUNTS entry has options without absolute container path: $entry" >&2
+      echo "If '$f2' is a container path it must start with '/'." >&2
+      exit 1
+    fi
+    src="$f1"; dst="$f1"; opts="$f2"
+  fi
+
+  if [[ "$src" != /* ]]; then
+    echo "Error: AISB_EXTRA_MOUNTS host path must be absolute: $src" >&2
+    exit 1
+  fi
+  if [[ "$dst" != /* ]]; then
+    echo "Error: AISB_EXTRA_MOUNTS container path must be absolute: $dst" >&2
+    exit 1
+  fi
+
+  local path
+  for path in "$src" "$dst"; do
+    case "$path" in
+      *,*|*$'\t'*|*$'\n'*|*\ *)
+        echo "Error: AISB_EXTRA_MOUNTS path contains forbidden whitespace or comma: $path" >&2
+        exit 1
+        ;;
+    esac
+    case "$path" in
+      *..*)
+        echo "Error: AISB_EXTRA_MOUNTS path must not contain '..': $path" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ -L "$src" ]]; then
+    echo "Error: AISB_EXTRA_MOUNTS refuses symlinked host path: $src" >&2
+    exit 1
+  fi
+  if [[ ! -e "$src" ]]; then
+    echo "Error: AISB_EXTRA_MOUNTS host path does not exist: $src" >&2
+    exit 1
+  fi
+  if common_path_is_broad_or_home "$src"; then
+    echo "Error: AISB_EXTRA_MOUNTS refuses broad host path: $src" >&2
+    echo "Mount a narrower subdirectory instead." >&2
+    exit 1
+  fi
+
+  local src_real workspace_real
+  src_real="$(common_realpath_m "$src")"
+  workspace_real="$(common_realpath_m "$workspace_root")"
+  if [[ -n "$workspace_real" && ( "$src_real" == "$workspace_real" || "$src_real" == "$workspace_real"/* ) ]]; then
+    echo "Error: AISB_EXTRA_MOUNTS host path is inside the workspace (already mounted): $src" >&2
+    exit 1
+  fi
+
+  local r
+  for r in "${reserved[@]}"; do
+    [[ -n "$r" ]] || continue
+    if [[ "$dst" == "$r" || "$dst" == "$r"/* ]]; then
+      echo "Error: AISB_EXTRA_MOUNTS container path overlaps reserved mount: $dst (reserved: $r)" >&2
+      exit 1
+    fi
+  done
+
+  common_require_mount_path "$src" "AISB_EXTRA_MOUNTS host path"
+  common_require_mount_path "$dst" "AISB_EXTRA_MOUNTS container path"
+
+  opts="$(aisb_extra_mount_normalize_opts "${opts:-}")"
+
+  printf '%s\t%s\t%s' "$src" "$dst" "$opts"
+}
+
+_common_append_extra_mounts() {
+  COMMON_EXTRA_MOUNT_LINES=()
+  (( ${#AISB_REPO_EXTRA_MOUNTS[@]} > 0 )) || return 0
+
+  local -a reserved=(
+    "${USER_HOME}"
+    "${ROOT}"
+    "/aisb-${TOOL}"
+    "/uv-tools"
+    "/uv-bin"
+    "/tmp"
+  )
+
+  local entry resolved src dst opts
+  for entry in "${AISB_REPO_EXTRA_MOUNTS[@]}"; do
+    resolved="$(aisb_extra_mount_resolve "$entry" "$ROOT" "${reserved[@]}")"
+    IFS=$'\t' read -r src dst opts <<< "$resolved"
+    COMMON_PODMAN_ARGS+=(-v "${src}:${dst}:${opts}")
+    COMMON_EXTRA_MOUNT_LINES+=("$src -> $dst ($opts)")
+  done
 }
 
 _common_append_seccomp() {
