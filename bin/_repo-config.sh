@@ -66,6 +66,8 @@ aisb_load_repo_env() {
   AISB_REPO_AUTO_BASE_IMAGE=""
   # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
   AISB_REPO_EXTRA_MOUNTS=()
+  # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
+  AISB_REPO_ALLOW_NON_GIT_WORKSPACE=""
 
   if [[ -L "$env_file" ]]; then
     echo "error: refusing symlinked repo config file: $env_file" >&2
@@ -119,6 +121,10 @@ aisb_load_repo_env() {
         for _token in $value; do
           [[ -n "$_token" ]] && AISB_REPO_EXTRA_MOUNTS+=("$_token")
         done
+        ;;
+      AISB_ALLOW_NON_GIT_WORKSPACE)
+        # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
+        AISB_REPO_ALLOW_NON_GIT_WORKSPACE="$value"
         ;;
       *)
         echo "warn: ignoring unsupported $env_file key '$key'" >&2

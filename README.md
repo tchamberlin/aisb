@@ -261,6 +261,10 @@ The file is parsed as data, not sourced as shell. Blank lines and comments are
 allowed. Recognized keys:
 
 - `AISB_BASE_IMAGE` — base image tag (see above).
+- `AISB_ALLOW_NON_GIT_WORKSPACE` — set to `1` to let agent wrappers run with
+  this directory as the workspace even when it is not a git repository.
+  Equivalent to setting the host env var of the same name, but scoped to the
+  repo via `.aisb.env`.
 - `AISB_EXTRA_MOUNTS` — extra host bind mounts. Each value is one or more
   whitespace-separated entries; the key may also be repeated on multiple lines.
   Each entry takes one of these forms:

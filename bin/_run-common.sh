@@ -165,24 +165,32 @@ common_init() {
   : "${USER_NAME:?USER_NAME must be set before common_init}"
   : "${USER_HOME:?USER_HOME must be set before common_init}"
 
+  local _is_git=0
   if git rev-parse --show-toplevel >/dev/null 2>&1; then
     ROOT="$(git rev-parse --show-toplevel)"
+    _is_git=1
   else
-    if [[ "${AISB_ALLOW_NON_GIT_WORKSPACE:-0}" != "1" ]]; then
-      echo "Error: ${TOOL} must be run from inside a git repository." >&2
-      echo >&2
-      echo "Agent wrappers mount the workspace read-write; refusing non-git parent directories." >&2
-      echo "Run from a project repository, or set AISB_ALLOW_NON_GIT_WORKSPACE=1 intentionally." >&2
-      exit 1
-    fi
     ROOT="$PWD"
   fi
   ROOT="$(realpath "$ROOT")"
+
+  aisb_load_repo_env "$ROOT"
+
+  if (( ! _is_git )) \
+     && [[ "${AISB_ALLOW_NON_GIT_WORKSPACE:-0}" != "1" \
+        && "${AISB_REPO_ALLOW_NON_GIT_WORKSPACE:-0}" != "1" ]]; then
+    echo "Error: ${TOOL} must be run from inside a git repository." >&2
+    echo >&2
+    echo "Agent wrappers mount the workspace read-write; refusing non-git parent directories." >&2
+    echo "Run from a project repository, set AISB_ALLOW_NON_GIT_WORKSPACE=1, or add" >&2
+    echo "AISB_ALLOW_NON_GIT_WORKSPACE=1 to .aisb.env at the workspace root." >&2
+    exit 1
+  fi
+
   common_check_workspace_root "$ROOT"
 
   BASE="$(aisb_workspace_base "$ROOT")"
   HASH="$(aisb_sha1_10 "$ROOT")"
-  aisb_load_repo_env "$ROOT"
   IMAGE="$(aisb_resolve_tool_image "$TOOL" "$HASH")"
 
   STAMP="$(date +%Y%m%d-%H%M%S)"
