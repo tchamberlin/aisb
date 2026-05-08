@@ -62,7 +62,7 @@ common_log_startup() {
   echo "[aisb:${TOOL}:debug] mount uv tool bin: $WORKSPACE_UV_TOOL_BIN_DIR -> /uv-bin (bind rw,nosuid,nodev)" >&2
   echo "[aisb:${TOOL}:debug] mount venv: $WORKSPACE_VENV_DIR -> /aisb-${TOOL}/venv (bind rw,nosuid,nodev)" >&2
   if (( ${#WORKSPACE_REPO_VENV_MASK_ARGS[@]} > 0 )); then
-    echo "[aisb:${TOOL}:debug] mask repo .venv: $WORKSPACE_REPO_VENV_MASK_DIR -> $WORKSPACE_REPO_VENV_PATH (bind rw,nosuid,nodev)" >&2
+    echo "[aisb:${TOOL}:debug] mask repo .venv: $WORKSPACE_REPO_VENV_MASK_DIR -> $WORKSPACE_REPO_VENV_PATH (bind ro,nosuid,nodev)" >&2
   else
     echo "[aisb:${TOOL}:debug] mask repo .venv: not present" >&2
   fi
@@ -306,14 +306,14 @@ common_init() {
     -e "PYTEST_ADDOPTS=${PYTEST_ADDOPTS:-} -o cache_dir=/aisb-${TOOL}/pytest"
     -v "${ROOT}:${ROOT}:${WORKSPACE_MOUNT_OPTS}"
     "${WORKSPACE_REPO_VENV_MASK_ARGS[@]}"
-    -v "${WORKSPACE_TMP_DIR}:/tmp:rw,nosuid,nodev,Z"
+    -v "${WORKSPACE_TMP_DIR}:/tmp:rw,nosuid,nodev,z"
     -v "${WORKSPACE_CACHE_DIR}:/aisb-${TOOL}/cache:rw,nosuid,nodev,z"
     -v "${WORKSPACE_STATE_DIR}:/aisb-${TOOL}/state:rw,nosuid,nodev,z"
     -v "${WORKSPACE_UV_CACHE_DIR}:/aisb-${TOOL}/uv-cache:rw,nosuid,nodev,z"
     -v "${WORKSPACE_UV_PYTHON_DIR}:/aisb-${TOOL}/uv-python:rw,nosuid,nodev,z"
     -v "${WORKSPACE_UV_TOOL_DIR}:/uv-tools:rw,nosuid,nodev,z"
     -v "${WORKSPACE_UV_TOOL_BIN_DIR}:/uv-bin:rw,nosuid,nodev,z"
-    -v "${WORKSPACE_VENV_DIR}:/aisb-${TOOL}/venv:rw,nosuid,nodev,Z"
+    -v "${WORKSPACE_VENV_DIR}:/aisb-${TOOL}/venv:rw,nosuid,nodev,z"
     -v "${WORKSPACE_PYTEST_CACHE_DIR}:/aisb-${TOOL}/pytest:rw,nosuid,nodev,z"
     -w "$ROOT"
   )
@@ -467,7 +467,7 @@ common_setup_workspace_venv_mask() {
 
   if [[ -d "$WORKSPACE_REPO_VENV_PATH" ]]; then
     WORKSPACE_REPO_VENV_MASK_ARGS=(
-      -v "${WORKSPACE_REPO_VENV_MASK_DIR}:${WORKSPACE_REPO_VENV_PATH}:rw,nosuid,nodev,Z"
+      -v "${WORKSPACE_REPO_VENV_MASK_DIR}:${WORKSPACE_REPO_VENV_PATH}:ro,nosuid,nodev,z"
     )
   fi
 }

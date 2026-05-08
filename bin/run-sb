@@ -147,7 +147,7 @@ fi
 
 if [[ -d "$REPO_VENV_PATH" ]]; then
   REPO_VENV_MASK_OPTS=(
-    -v "${REPO_VENV_MASK_DIR}:${REPO_VENV_PATH}:rw,nosuid,nodev,Z"
+    -v "${REPO_VENV_MASK_DIR}:${REPO_VENV_PATH}:ro,nosuid,nodev,z"
   )
 fi
 
@@ -309,12 +309,12 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   "${EXTRA_MOUNT_OPTS[@]}" \
   -v "$ROOT":"$ROOT":"$WORKSPACE_MOUNT_OPTS" \
   "${REPO_VENV_MASK_OPTS[@]}" \
-  -v "$TMP_DIR":/tmp:rw,nosuid,nodev,Z \
+  -v "$TMP_DIR":/tmp:rw,nosuid,nodev,z \
   -v "$UV_CACHE":/uv-cache:rw,nosuid,nodev,z \
   -v "$UV_PYTHON_DIR":/uv-python:rw,nosuid,nodev,z \
   -v "$UV_TOOL_DIR":/uv-tools:rw,nosuid,nodev,z \
   -v "$UV_TOOL_BIN_DIR":/uv-bin:rw,nosuid,nodev,z \
-  -v "$VENV_DIR":/venv:rw,nosuid,nodev,Z \
+  -v "$VENV_DIR":/venv:rw,nosuid,nodev,z \
   -w "$ROOT" \
   "$IMAGE" \
   "$@"
