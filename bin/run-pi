@@ -53,6 +53,9 @@ if [[ ! -e "$PI_HOME_DIR/.pi" ]]; then
   cp -a "$HOME/.pi" "$PI_HOME_DIR/.pi"
 fi
 mkdir -p "$PI_HOME_DIR/.pi/agent"
+# Pre-create .config so podman doesn't auto-create it as namespace-root when
+# bind-mounting ~/.config/gh; otherwise tools like wrangler can't write here.
+mkdir -p "$PI_HOME_DIR/.config"
 
 common_require_mount_path "$PI_HOME_DIR" "pi home source path"
 common_require_mount_path "${USER_HOME}/.pi/agent" "pi state destination path"

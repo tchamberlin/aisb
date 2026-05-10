@@ -19,6 +19,9 @@ common_init
 
 CODEX_HOME_DIR="${STATE_BASE}/codex/home-codex"
 mkdir -p "$CODEX_HOME_DIR"
+# Pre-create .config so podman doesn't auto-create it as namespace-root when
+# bind-mounting ~/.config/gh, leaving the parent unwritable to the calling user.
+mkdir -p "$CODEX_HOME_DIR/.config"
 
 common_require_mount_path "${CODEX_HOME_DIR}" "Codex shared home source path"
 common_require_mount_path "${CODEX_HOME_DIR}/.codex" "Codex shared config source path"
