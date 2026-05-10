@@ -14,9 +14,12 @@ RUN /usr/local/bin/aisb-install-agent-runtime-deps \
  && rm /usr/local/bin/aisb-install-agent-runtime-deps /usr/local/bin/aisb-install-agent-python-tools /usr/local/bin/aisb-install-node-npm
 
 ARG PI_VERSION=unknown
+LABEL io.aisb.tool=pi \
+      io.aisb.tool.package="@earendil-works/pi-coding-agent" \
+      io.aisb.tool.version="${PI_VERSION}"
 RUN echo "pi-coding-agent version: ${PI_VERSION}" \
  && test "${PI_VERSION}" != "unknown" \
- && npm install -g "@mariozechner/pi-coding-agent@${PI_VERSION}" \
+ && npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}" \
  && rm -rf "${NPM_CONFIG_CACHE:-/root/.npm}" /tmp/npm-cache
 
 ENTRYPOINT ["pi"]

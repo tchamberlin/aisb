@@ -308,7 +308,7 @@ build_one() {
       ensure_base_image
       base_image_id="$(podman image inspect --format '{{.Id}}' "$BASE_IMAGE_TAG")"
       local pi_version
-      pi_version="$(resolve_npm_version @mariozechner/pi-coding-agent)"
+      pi_version="$(resolve_npm_version @earendil-works/pi-coding-agent)"
       echo "Latest pi-coding-agent version: $pi_version"
       flags+=(--build-arg "PI_VERSION=$pi_version")
       ;;

@@ -92,7 +92,7 @@ common_tool_package_name() {
   case "$1" in
     claude) printf '%s\n' "@anthropic-ai/claude-code" ;;
     codex)  printf '%s\n' "@openai/codex" ;;
-    pi)     printf '%s\n' "@mariozechner/pi-coding-agent" ;;
+    pi)     printf '%s\n' "@earendil-works/pi-coding-agent" ;;
     *) return 1 ;;
   esac
 }
@@ -108,22 +108,32 @@ common_cache_file_is_fresh() {
   (( now - mtime < ttl ))
 }
 
-common_latest_npm_version_cached() {
+common_update_check_cache_file() {
   local package="$1"
-  local cache_dir cache_file cache_name ttl latest
-
-  ttl="${AISB_UPDATE_CHECK_TTL_SECONDS:-86400}"
+  local cache_dir cache_name
   cache_dir="${CACHE_BASE}/update-checks"
   cache_name="${package//@/_}"
   cache_name="${cache_name//\//_}"
-  cache_file="${cache_dir}/${cache_name}.version"
+  printf '%s/%s.version\n' "$cache_dir" "$cache_name"
+}
+
+common_update_check_ttl_seconds() {
+  printf '%s\n' "${AISB_UPDATE_CHECK_TTL_SECONDS:-3600}"
+}
+
+common_latest_npm_version_cached() {
+  local package="$1"
+  local cache_file ttl latest
+
+  ttl="$(common_update_check_ttl_seconds)"
+  cache_file="$(common_update_check_cache_file "$package")"
 
   if common_cache_file_is_fresh "$cache_file" "$ttl"; then
     sed -n '1p' "$cache_file"
     return 0
   fi
 
-  mkdir -p "$cache_dir"
+  mkdir -p "$(dirname "$cache_file")"
   if command -v timeout >/dev/null 2>&1; then
     latest="$(NPM_CONFIG_FUND=false NPM_CONFIG_UPDATE_NOTIFIER=false timeout 5s npm view "$package" version 2>/dev/null || true)"
   else
@@ -136,17 +146,30 @@ common_latest_npm_version_cached() {
   printf '%s\n' "$latest"
 }
 
-common_maybe_warn_tool_update() {
-  local package current latest flavor hint
+common_maybe_prompt_tool_update() {
+  local package current latest flavor hint reply cache_file ttl
 
   [[ "${AISB_QUIET:-0}" == "1" ]] && return 0
   [[ "${AISB_UPDATE_CHECK:-1}" == "0" ]] && return 0
+  # If the stale-image prompt already offered a rebuild this run, don't ask
+  # again — both prompts run the same build-containers command.
+  [[ "${COMMON_REBUILD_PROMPT_SHOWN:-0}" == "1" ]] && return 0
   case "$TOOL" in
     claude|codex|pi) ;;
     *) return 0 ;;
   esac
 
   package="$(common_tool_package_name "$TOOL")" || return 0
+
+  # Throttle: if we already checked within the TTL, skip both the npm
+  # round-trip and the prompt. Saying "no" leaves the cache fresh, so the
+  # user is not pestered again until the TTL expires.
+  ttl="$(common_update_check_ttl_seconds)"
+  cache_file="$(common_update_check_cache_file "$package")"
+  if common_cache_file_is_fresh "$cache_file" "$ttl"; then
+    return 0
+  fi
+
   current="$(common_image_label "$IMAGE" "io.aisb.tool.version")"
   [[ -n "$current" && "$current" != "<no value>" && "$current" != "unknown" ]] || return 0
 
@@ -156,8 +179,26 @@ common_maybe_warn_tool_update() {
   flavor="$(aisb_managed_image_build_flavor "$TOOL")"
   hint="$(aisb_build_command_hint "$_AISB_COMMON_DIR" "$ROOT" "$flavor")"
   echo "[aisb:${TOOL}] update available: ${package} ${current} -> ${latest}" >&2
-  echo "[aisb:${TOOL}] rebuild the managed image with:" >&2
-  echo "  ${hint}" >&2
+
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    echo "[aisb:${TOOL}] rebuild the managed image with:" >&2
+    echo "  ${hint}" >&2
+    return 0
+  fi
+
+  printf 'Rebuild the managed image now with `%s`? [y/N] ' "$hint" >&2
+  read -r reply || reply=""
+  case "$reply" in
+    y|Y|yes|Yes|YES)
+      if ! eval "$hint"; then
+        echo "Error: rebuild failed; refusing to continue with stale image '$IMAGE'" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      echo "[aisb:${TOOL}] continuing with current image; rebuild later with: $hint" >&2
+      ;;
+  esac
 }
 
 common_init() {
@@ -717,6 +758,7 @@ common_check_image() {
   fi
 
   common_maybe_prompt_rebuild_stale_image
+  common_maybe_prompt_tool_update
   common_maybe_repair_workspace_relabel "$ROOT"
 }
 
@@ -824,6 +866,7 @@ common_maybe_prompt_rebuild_stale_image() {
   echo "Image '$IMAGE' may be stale: $reason" >&2
   printf 'Rebuild it now with `%s`? [y/N] ' "$rebuild_cmd" >&2
   read -r reply || reply=""
+  COMMON_REBUILD_PROMPT_SHOWN=1
   case "$reply" in
     y|Y|yes|Yes|YES)
       if ! eval "$rebuild_cmd"; then

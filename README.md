@@ -84,8 +84,11 @@ The wrappers:
   mount/auth/hardening diagnostics, or `AISB_QUIET=1` to suppress startup logs.
 - disable Claude/Codex self-update paths inside the container. AISB-managed
   images are the update boundary: wrappers check npm for newer agent versions
-  at most once per day and print the exact `bin/build-containers <tool>` command
-  to rebuild when the image is stale.
+  at most once per hour and, in interactive runs, prompt to rebuild the
+  managed image before continuing. Declining the prompt continues with the
+  current image and snoozes the check for the rest of the TTL window.
+  Non-interactive runs just print the exact `bin/build-containers <tool>`
+  command and continue.
 - on SELinux hosts, ask before marking a repo container-readable the first time
   an agent wrapper runs there. Approval is remembered per repo under AISB state
   and future runs mount the workspace with Podman's `:z` relabel option. Set
@@ -216,7 +219,7 @@ Per-wrapper overrides:
 | `AISB_DEBUG=1`             | Include detailed mount/auth/hardening diagnostics in startup logs. |
 | `AISB_QUIET=1`             | Suppress wrapper startup summary logs.                            |
 | `AISB_UPDATE_CHECK=0`      | Disable AISB-managed agent version checks on wrapper startup.      |
-| `AISB_UPDATE_CHECK_TTL_SECONDS` | Cache TTL for npm latest-version checks (default `86400`).   |
+| `AISB_UPDATE_CHECK_TTL_SECONDS` | Cache TTL for npm latest-version checks and the rebuild prompt (default `3600`). |
 | `AISB_RELABEL_AUTH=1`      | Allow wrappers to relabel specific auth/config paths without prompting on SELinux hosts. |
 | `AISB_RELABEL_WORKSPACE=1` | Add `:z` to the workspace mount for SELinux relabeling without prompting. |
 | `AISB_MEMORY`              | `--memory` cap (default `8g`).                                        |

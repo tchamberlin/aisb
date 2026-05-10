@@ -24,7 +24,6 @@ common_require_mount_path "${CODEX_HOME_DIR}" "Codex shared home source path"
 common_require_mount_path "${CODEX_HOME_DIR}/.codex" "Codex shared config source path"
 
 common_check_image
-common_maybe_warn_tool_update
 
 # Seed shared Codex home from host config on first use. After that, Codex
 # state lives in this shared durable home and survives container removal.

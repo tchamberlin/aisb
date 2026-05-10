@@ -23,7 +23,6 @@ common_require_mount_path "$HOME/.claude" "Claude host state path"
 common_require_mount_path "${USER_HOME}/.claude" "Claude container state path"
 
 common_check_image
-common_maybe_warn_tool_update
 
 # Ensure host-side files exist. Claude's config directory is mounted rw so its
 # atomic credential/settings writes persist normally.
