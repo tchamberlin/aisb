@@ -18,6 +18,7 @@ source "$SCRIPT_DIR/_run-common.sh"
 common_init
 
 CODEX_HOME_DIR="${STATE_BASE}/codex/home-codex"
+common_maybe_reset_tool_home "$CODEX_HOME_DIR"
 mkdir -p "$CODEX_HOME_DIR"
 # Pre-create .config so podman doesn't auto-create it as namespace-root when
 # bind-mounting ~/.config/gh, leaving the parent unwritable to the calling user.

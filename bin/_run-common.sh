@@ -880,6 +880,24 @@ common_maybe_prompt_rebuild_stale_image() {
   esac
 }
 
+common_maybe_reset_tool_home() {
+  # AISB_RESET_HOME=1 wipes the per-tool persistent home dir (used to recover
+  # from sub-uid-owned files podman left behind via mountpoint auto-creation).
+  local home_dir="$1"
+  [[ "${AISB_RESET_HOME:-0}" == "1" ]] || return 0
+  if [[ -z "$home_dir" || "$home_dir" == "/" || "$home_dir" != "$STATE_BASE"/* ]]; then
+    echo "Error: AISB_RESET_HOME refused on suspicious path: $home_dir" >&2
+    exit 1
+  fi
+  if [[ -d "$home_dir" ]]; then
+    echo "[aisb:${TOOL}] AISB_RESET_HOME=1: removing $home_dir (podman unshare rm -rf)" >&2
+    if ! podman unshare rm -rf -- "$home_dir"; then
+      echo "Error: failed to remove $home_dir" >&2
+      exit 1
+    fi
+  fi
+}
+
 _common_append_gh() {
   if [[ -n "${GH_TOKEN:-}" ]]; then
     COMMON_PODMAN_ARGS+=(-e "GH_TOKEN=$GH_TOKEN")

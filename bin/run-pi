@@ -48,6 +48,7 @@ common_check_image
 mkdir -p "$HOME/.pi/agent"
 
 PI_HOME_DIR="${STATE_BASE}/pi/home-pi"
+common_maybe_reset_tool_home "$PI_HOME_DIR"
 mkdir -p "$PI_HOME_DIR"
 if [[ ! -e "$PI_HOME_DIR/.pi" ]]; then
   cp -a "$HOME/.pi" "$PI_HOME_DIR/.pi"
