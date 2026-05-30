@@ -82,6 +82,16 @@ The wrappers:
 - print a short startup summary to stderr with the workspace, repo config,
   selected image, and resource caps. Set `AISB_DEBUG=1` to include detailed
   mount/auth/hardening diagnostics, or `AISB_QUIET=1` to suppress startup logs.
+- optionally publish container ports at startup with `AISB_PUBLISH_PORTS`.
+  For example, to make a Vite server listening on `0.0.0.0:5173` inside Codex
+  reachable from the host only on loopback, start a new container with:
+
+  ```sh
+  AISB_PUBLISH_PORTS=127.0.0.1:5173:5173 codex
+  ```
+
+  Port publishing is a `podman run` option, so it cannot be added to an
+  already-running container.
 - disable Claude/Codex self-update paths inside the container. AISB-managed
   images are the update boundary: wrappers check npm for newer agent versions
   at most once per hour and, in interactive runs, prompt to rebuild the
@@ -156,6 +166,10 @@ the sandbox with sensitive material:
   exfiltration path (DNS, HTTPS, anything else) is open. For one-shot
   `sb` runs you can set `AISB_NO_NETWORK=1` to drop all networking; agent
   wrappers need the network for API calls and do not support this.
+- **Published ports are opt-in ingress.** `AISB_PUBLISH_PORTS` adds
+  host-to-container access for new runs. Prefer loopback bindings such as
+  `127.0.0.1:5173:5173`; binding to `0.0.0.0` can expose the service to other
+  machines that can reach the host.
 - **The mounted repo is read-write.** An agent can modify files, commit, and
   (if `GH_TOKEN` or `gh` auth is present) push malicious commits upstream.
   `AISB_WORKSPACE_READONLY=1` makes the repo mount read-only for review-style
@@ -225,6 +239,7 @@ Per-wrapper overrides:
 | `AISB_MEMORY`              | `--memory` cap (default `8g`).                                        |
 | `AISB_CPUS`                | `--cpus` cap (default `4`).                                           |
 | `AISB_PIDS`                | `--pids-limit` cap (default `1024`).                                  |
+| `AISB_PUBLISH_PORTS`       | Whitespace-separated Podman `-p` specs for new runs, e.g. `127.0.0.1:5173:5173`. |
 | `AISB_NO_NETWORK=1`        | `run-sb` only: disable all networking (`--network=none`).             |
 | `AISB_STRICT_SECCOMP=1`    | Apply `seccomp-strict.json` (extra denies on top of podman default).  |
 | `AISB_SECCOMP_PROFILE`     | Path to custom seccomp profile (overrides `seccomp-strict.json`).     |

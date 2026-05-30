@@ -15,7 +15,7 @@
 #   WORKSPACE_TMP_DIR, WORKSPACE_REPO_VENV_PATH, WORKSPACE_REPO_VENV_MASK_DIR
 #   AUTH_MODE, REPO_MODE
 #   COMMON_PODMAN_ARGS (all shared podman flags: base hardening, tty, gh
-#                       auth passthrough, optional strict seccomp)
+#                       auth passthrough, optional port publishing/seccomp)
 
 if [[ "${_RUN_COMMON_LOADED:-0}" == "1" ]]; then
   return 0
@@ -34,6 +34,9 @@ common_log_startup() {
   echo "[aisb:${TOOL}] repo config: $(aisb_repo_config_summary)" >&2
   echo "[aisb:${TOOL}] image: $IMAGE ($(aisb_tool_image_source_summary "$TOOL"))" >&2
   echo "[aisb:${TOOL}] limits: memory=$AISB_MEMORY cpus=$AISB_CPUS pids=$AISB_PIDS" >&2
+  if (( ${#COMMON_PUBLISH_PORT_LINES[@]} > 0 )); then
+    echo "[aisb:${TOOL}] published ports: ${COMMON_PUBLISH_PORT_LINES[*]}" >&2
+  fi
   if (( ${#COMMON_EXTRA_MOUNT_LINES[@]} > 0 )); then
     echo "[aisb:${TOOL}] extra mounts: ${#COMMON_EXTRA_MOUNT_LINES[@]} from ${AISB_REPO_ENV_FILE}" >&2
     local _extra_mount_line
@@ -370,6 +373,7 @@ common_init() {
   _common_append_gh
   _common_append_agents
   _common_append_extra_mounts
+  _common_append_publish_ports
   _common_append_seccomp
   common_log_startup
 }
@@ -925,6 +929,104 @@ _common_append_tty() {
   if [[ -t 0 && -t 1 ]]; then
     COMMON_PODMAN_ARGS+=(-t)
   fi
+}
+
+aisb_validate_publish_port_number() {
+  local port="$1"
+  [[ "$port" =~ ^[0-9]+$ ]] || return 1
+  (( port >= 1 && port <= 65535 ))
+}
+
+aisb_validate_publish_port_spec() {
+  local spec="$1"
+  if [[ -z "$spec" ]]; then
+    echo "Error: AISB_PUBLISH_PORTS contains an empty port spec" >&2
+    exit 1
+  fi
+  case "$spec" in
+    -*|*,*|*$'\t'*|*$'\n'*|*\ *)
+      echo "Error: AISB_PUBLISH_PORTS contains an invalid port spec: $spec" >&2
+      echo "Expected: containerPort[/tcp|udp|sctp], hostPort:containerPort, or IPv4:hostPort:containerPort" >&2
+      exit 1
+      ;;
+  esac
+
+  local main="$spec" proto=""
+  if [[ "$main" == */* ]]; then
+    proto="${main##*/}"
+    main="${main%/*}"
+    case "$proto" in
+      tcp|udp|sctp) ;;
+      *)
+        echo "Error: AISB_PUBLISH_PORTS uses unsupported protocol '$proto' in: $spec" >&2
+        exit 1
+        ;;
+    esac
+  fi
+
+  if [[ -z "$main" || "$main" == *::* || "$main" == :* || "$main" == *: ]]; then
+    echo "Error: AISB_PUBLISH_PORTS contains an invalid port spec: $spec" >&2
+    echo "Expected: containerPort[/tcp|udp|sctp], hostPort:containerPort, or IPv4:hostPort:containerPort" >&2
+    exit 1
+  fi
+
+  local f1 f2 f3 f4 host_ip="" host_port="" container_port=""
+  IFS=: read -r f1 f2 f3 f4 <<< "$main"
+  if [[ -n "${f4:-}" ]]; then
+    echo "Error: AISB_PUBLISH_PORTS only supports IPv4 host bindings, not IPv6: $spec" >&2
+    exit 1
+  fi
+
+  if [[ -n "${f3:-}" ]]; then
+    host_ip="$f1"
+    host_port="$f2"
+    container_port="$f3"
+    case "$host_ip" in
+      *[!0-9.]*)
+        echo "Error: AISB_PUBLISH_PORTS host binding must be an IPv4 literal: $spec" >&2
+        exit 1
+        ;;
+    esac
+  elif [[ -n "${f2:-}" ]]; then
+    host_port="$f1"
+    container_port="$f2"
+  else
+    container_port="$f1"
+  fi
+
+  if [[ -n "$host_port" ]] && ! aisb_validate_publish_port_number "$host_port"; then
+    echo "Error: AISB_PUBLISH_PORTS host port must be 1-65535: $spec" >&2
+    exit 1
+  fi
+  if ! aisb_validate_publish_port_number "$container_port"; then
+    echo "Error: AISB_PUBLISH_PORTS container port must be 1-65535: $spec" >&2
+    exit 1
+  fi
+}
+
+aisb_validate_publish_ports_value() {
+  local value="$1"
+  case "$value" in
+    *$'\t'*|*$'\n'*)
+      echo "Error: AISB_PUBLISH_PORTS must be a space-separated list, not tabs or newlines" >&2
+      exit 1
+      ;;
+  esac
+}
+
+_common_append_publish_ports() {
+  COMMON_PUBLISH_PORT_LINES=()
+  [[ -n "${AISB_PUBLISH_PORTS:-}" ]] || return 0
+
+  local spec
+  local -a specs
+  aisb_validate_publish_ports_value "$AISB_PUBLISH_PORTS"
+  read -r -a specs <<< "$AISB_PUBLISH_PORTS"
+  for spec in "${specs[@]}"; do
+    aisb_validate_publish_port_spec "$spec"
+    COMMON_PODMAN_ARGS+=(-p "$spec")
+    COMMON_PUBLISH_PORT_LINES+=("$spec")
+  done
 }
 
 aisb_extra_mount_normalize_opts() {

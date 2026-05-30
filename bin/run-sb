@@ -16,6 +16,7 @@ set -euo pipefail
 #   AISB_MEMORY       memory cap passed to --memory (default: 8g)
 #   AISB_CPUS         cpu cap passed to --cpus (default: 4)
 #   AISB_PIDS         pid cap passed to --pids-limit (default: 1024)
+#   AISB_PUBLISH_PORTS whitespace-separated Podman -p specs
 #   AISB_DEBUG=1      print detailed mount/auth/hardening diagnostics
 #   AISB_QUIET=1      suppress startup summary logs
 
@@ -39,6 +40,9 @@ log_startup() {
   echo "[aisb:sb] repo config: $(aisb_repo_config_summary)" >&2
   echo "[aisb:sb] image: $IMAGE ($(aisb_tool_image_source_summary sb))" >&2
   echo "[aisb:sb] limits: memory=$AISB_MEMORY cpus=$AISB_CPUS pids=$AISB_PIDS" >&2
+  if (( ${#PUBLISH_PORT_LINES[@]} > 0 )); then
+    echo "[aisb:sb] published ports: ${PUBLISH_PORT_LINES[*]}" >&2
+  fi
   if (( ${#EXTRA_MOUNT_LINES[@]} > 0 )); then
     echo "[aisb:sb] extra mounts: ${#EXTRA_MOUNT_LINES[@]} from ${AISB_REPO_ENV_FILE}" >&2
     local _extra_line
@@ -248,6 +252,23 @@ if [[ "${AISB_NO_NETWORK:-0}" == "1" ]]; then
   NET_OPTS+=(--network=none)
 fi
 
+PUBLISH_PORT_OPTS=()
+PUBLISH_PORT_LINES=()
+if [[ -n "${AISB_PUBLISH_PORTS:-}" ]]; then
+  if [[ "${AISB_NO_NETWORK:-0}" == "1" ]]; then
+    echo "Error: AISB_PUBLISH_PORTS cannot be used with AISB_NO_NETWORK=1" >&2
+    exit 1
+  fi
+
+  aisb_validate_publish_ports_value "$AISB_PUBLISH_PORTS"
+  read -r -a _publish_specs <<< "$AISB_PUBLISH_PORTS"
+  for _publish_spec in "${_publish_specs[@]}"; do
+    aisb_validate_publish_port_spec "$_publish_spec"
+    PUBLISH_PORT_OPTS+=(-p "$_publish_spec")
+    PUBLISH_PORT_LINES+=("$_publish_spec")
+  done
+fi
+
 WORKSPACE_MOUNT_OPTS="rw,nosuid,nodev"
 if [[ "${AISB_WORKSPACE_READONLY:-0}" == "1" ]]; then
   WORKSPACE_MOUNT_OPTS="ro,nosuid,nodev"
@@ -284,6 +305,7 @@ exec podman run --rm "${TTY_OPTS[@]}" --pull=never \
   --cpus="$AISB_CPUS" \
   --pids-limit="$AISB_PIDS" \
   "${NET_OPTS[@]}" \
+  "${PUBLISH_PORT_OPTS[@]}" \
   "${SECCOMP_OPTS[@]}" \
   --tmpfs /home/sb:rw,nosuid,nodev,size=256m,mode=1777 \
   --label "io.aisb.repo=$ROOT" \
