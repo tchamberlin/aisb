@@ -1,0 +1,50 @@
+# Playwright-ready aisb repo base image.
+#
+# Copy this file to your project's repo root as `Containerfile`, then build the
+# repo-derived images with:
+#
+#   AISB_WORKSPACE=/path/to/your/repo aisb-build all
+#
+# aisb tags this as localhost/aisb-<repo-name>-<repo-hash>:latest and derives the
+# claude/codex/pi images from it automatically.
+#
+# Why this works inside aisb's sandbox:
+#   - /opt is not shadowed by any runtime mount, so baked browsers survive.
+#   - The wrapper resets HOME/PATH but NOT PLAYWRIGHT_BROWSERS_PATH, so the ENV
+#     below is inherited at runtime and Playwright finds the baked browsers.
+#   - Build runs as root, runtime as your host UID (keep-id), so the browser dir
+#     is made world-readable/writable for the runtime user.
+
+FROM localhost/aisb-base:latest
+
+# IMPORTANT: keep this in sync with the @playwright/test version in your repo's
+# package.json. The baked browsers are tied to this exact version; if your repo
+# pins a different version, the test runner will ask you to re-download browsers.
+ARG PLAYWRIGHT_VERSION=1.49.1
+
+# Chromium runtime libraries on Fedora. Playwright's `install --with-deps` only
+# knows Debian/Ubuntu, so the equivalents are installed here via microdnf.
+RUN microdnf install -y --setopt=install_weak_deps=0 \
+      nss nspr \
+      atk at-spi2-atk at-spi2-core \
+      cups-libs libdrm libxkbcommon mesa-libgbm \
+      libX11-xcb libXcomposite libXdamage libXext libXfixes \
+      libXrandr libXcursor libXi libXtst libXScrnSaver \
+      alsa-lib pango cairo expat dbus-libs \
+      liberation-fonts \
+ && microdnf clean all \
+ && rm -rf /var/cache/dnf /var/cache/yum
+
+# Bake browsers at a fixed path that the runtime mounts do not shadow. This ENV
+# is inherited by the agent at runtime (the wrapper does not override it).
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+
+# Install the test runner globally (drives the browser download and gives a
+# `playwright` CLI in the sandbox), then download Chromium into /opt. Make the
+# tree world-accessible so the non-root runtime user can read browsers and write
+# Playwright's registry markers.
+RUN npm install -g "@playwright/test@${PLAYWRIGHT_VERSION}" \
+ && rm -rf "${NPM_CONFIG_CACHE}" \
+ && mkdir -p /opt/ms-playwright \
+ && playwright install chromium \
+ && chmod -R a+rwX /opt/ms-playwright

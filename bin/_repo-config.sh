@@ -52,6 +52,51 @@ aisb_trim() {
   printf '%s' "$value"
 }
 
+# Split a value into whitespace-separated tokens, honoring single and double
+# quotes so an individual token may contain spaces (e.g. a mount path under a
+# volume named "T7 Shield"). Quote characters group the enclosed text but are
+# not kept in the token. Results are returned in the global array
+# AISB_SPLIT_TOKENS. Returns non-zero on an unterminated quote.
+aisb_split_quoted() {
+  local value="$1"
+  AISB_SPLIT_TOKENS=()
+  local n=${#value}
+  local i=0 ch token="" in_token=0 quote=""
+  while (( i < n )); do
+    ch="${value:i:1}"
+    if [[ -n "$quote" ]]; then
+      if [[ "$ch" == "$quote" ]]; then
+        quote=""
+      else
+        token+="$ch"
+      fi
+      i=$((i + 1))
+      continue
+    fi
+    case "$ch" in
+      \'|\")
+        quote="$ch"
+        in_token=1
+        ;;
+      ' '|$'\t')
+        if (( in_token )); then
+          AISB_SPLIT_TOKENS+=("$token")
+          token=""
+          in_token=0
+        fi
+        ;;
+      *)
+        token+="$ch"
+        in_token=1
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  [[ -z "$quote" ]] || return 1
+  (( in_token )) && AISB_SPLIT_TOKENS+=("$token")
+  return 0
+}
+
 aisb_load_repo_env() {
   local root="$1"
   local env_file="$root/.aisb.env"
@@ -68,6 +113,14 @@ aisb_load_repo_env() {
   AISB_REPO_EXTRA_MOUNTS=()
   # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
   AISB_REPO_ALLOW_NON_GIT_WORKSPACE=""
+  # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
+  AISB_REPO_NPM_PACKAGES=()
+  # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
+  AISB_REPO_PYTHON_TOOLS=()
+  # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
+  AISB_REPO_GENERATED_BASE=0
+  # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
+  AISB_REPO_PACKAGE_SPEC=""
 
   if [[ -L "$env_file" ]]; then
     echo "error: refusing symlinked repo config file: $env_file" >&2
@@ -92,7 +145,7 @@ aisb_load_repo_env() {
     return 0
   fi
 
-  local line key value line_no
+  local line key value raw_value line_no
   line_no=0
   while IFS= read -r line || [[ -n "$line" ]]; do
     line_no=$((line_no + 1))
@@ -105,8 +158,8 @@ aisb_load_repo_env() {
     fi
 
     key="$(aisb_trim "${line%%=*}")"
-    value="$(aisb_trim "${line#*=}")"
-    value="$(aisb_strip_quotes "$value")"
+    raw_value="$(aisb_trim "${line#*=}")"
+    value="$(aisb_strip_quotes "$raw_value")"
 
     case "$key" in
       AISB_BASE_IMAGE)
@@ -115,11 +168,41 @@ aisb_load_repo_env() {
         AISB_REPO_ENV_HAS_BASE_IMAGE=1
         ;;
       AISB_EXTRA_MOUNTS)
+        # Whitespace separates entries, but single/double quotes group spaces
+        # so a mount path may live under a volume name like "T7 Shield".
+        if aisb_split_quoted "$raw_value"; then
+          local _token
+          for _token in "${AISB_SPLIT_TOKENS[@]}"; do
+            [[ -n "$_token" ]] && AISB_REPO_EXTRA_MOUNTS+=("$_token")
+          done
+        else
+          echo "warn: ignoring AISB_EXTRA_MOUNTS with unbalanced quotes in $env_file:$line_no" >&2
+        fi
+        ;;
+      AISB_NPM_PACKAGES)
         local _token
-        # Word-split on whitespace; each token is one mount entry.
+        # Word-split on whitespace; each token is one npm package spec.
         # shellcheck disable=SC2206
         for _token in $value; do
-          [[ -n "$_token" ]] && AISB_REPO_EXTRA_MOUNTS+=("$_token")
+          [[ -n "$_token" ]] || continue
+          if aisb_is_valid_package_token "$_token"; then
+            AISB_REPO_NPM_PACKAGES+=("$_token")
+          else
+            echo "warn: ignoring invalid npm package '$_token' in $env_file:$line_no" >&2
+          fi
+        done
+        ;;
+      AISB_PYTHON_TOOLS)
+        local _token
+        # Word-split on whitespace; each token is one Python tool spec.
+        # shellcheck disable=SC2206
+        for _token in $value; do
+          [[ -n "$_token" ]] || continue
+          if aisb_is_valid_package_token "$_token"; then
+            AISB_REPO_PYTHON_TOOLS+=("$_token")
+          else
+            echo "warn: ignoring invalid Python tool '$_token' in $env_file:$line_no" >&2
+          fi
         done
         ;;
       AISB_ALLOW_NON_GIT_WORKSPACE)
@@ -132,12 +215,67 @@ aisb_load_repo_env() {
     esac
   done < "$env_file"
 
-  if [[ -z "$AISB_REPO_BASE_IMAGE" && -n "$AISB_REPO_CONTAINERFILE" ]]; then
+  local have_packages=0
+  if (( ${#AISB_REPO_NPM_PACKAGES[@]} + ${#AISB_REPO_PYTHON_TOOLS[@]} > 0 )); then
+    have_packages=1
+  fi
+
+  if [[ "$AISB_REPO_ENV_HAS_BASE_IMAGE" == "1" ]]; then
+    # An explicit base image takes the repo's runtime fully under user control,
+    # so declarative package keys are ignored to avoid silently layering on top.
+    if (( have_packages )); then
+      echo "warn: ignoring AISB_NPM_PACKAGES/AISB_PYTHON_TOOLS in $env_file because AISB_BASE_IMAGE is set" >&2
+      AISB_REPO_NPM_PACKAGES=()
+      AISB_REPO_PYTHON_TOOLS=()
+    fi
+  elif [[ -n "$AISB_REPO_CONTAINERFILE" ]]; then
     AISB_REPO_BASE_IMAGE="$AISB_REPO_AUTO_BASE_IMAGE"
-  elif [[ -z "$AISB_REPO_BASE_IMAGE" && "$containerfile_is_symlink" == "1" ]]; then
+    if (( have_packages )); then
+      echo "warn: ignoring AISB_NPM_PACKAGES/AISB_PYTHON_TOOLS in $env_file because $containerfile is present" >&2
+      AISB_REPO_NPM_PACKAGES=()
+      AISB_REPO_PYTHON_TOOLS=()
+    fi
+  elif (( have_packages )); then
+    # Declarative packages compile into a generated base image layered on the
+    # default base, so the repo gets its tools without hand-writing a Containerfile.
+    AISB_REPO_AUTO_BASE_IMAGE="$(aisb_auto_base_image "$root")"
+    AISB_REPO_BASE_IMAGE="$AISB_REPO_AUTO_BASE_IMAGE"
+    # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
+    AISB_REPO_GENERATED_BASE=1
+    AISB_REPO_PACKAGE_SPEC="$(aisb_package_spec)"
+  elif [[ "$containerfile_is_symlink" == "1" ]]; then
     echo "error: refusing symlinked repo Containerfile as base image source: $containerfile" >&2
     return 1
   fi
+}
+
+# Token charset accepted in AISB_NPM_PACKAGES / AISB_PYTHON_TOOLS. Each token is
+# emitted single-quoted into a generated Containerfile RUN line and passed as a
+# distinct argv element to npm/uv, so the only shell-injection escape to block is
+# a literal single quote. We also reject leading '-' (option injection),
+# backslashes (Containerfile line continuation), and embedded whitespace.
+aisb_is_valid_package_token() {
+  local t="$1"
+  [[ -n "$t" ]] || return 1
+  [[ "$t" != -* ]] || return 1
+  case "$t" in
+    *\'*) return 1 ;;
+    *\\*) return 1 ;;
+    *[[:space:]]*) return 1 ;;
+  esac
+  return 0
+}
+
+# Deterministic description of the declared packages, folded into the generated
+# base image's recipe fingerprint so edits to the package list trigger a rebuild.
+aisb_package_spec() {
+  local p
+  for p in "${AISB_REPO_NPM_PACKAGES[@]}"; do
+    printf 'npm:%s\n' "$p"
+  done
+  for p in "${AISB_REPO_PYTHON_TOOLS[@]}"; do
+    printf 'py:%s\n' "$p"
+  done
 }
 
 aisb_append_repo_base_image() {
@@ -225,9 +363,18 @@ aisb_repo_base_is_local_containerfile() {
     && "${AISB_REPO_BASE_IMAGE:-}" == "$AISB_REPO_AUTO_BASE_IMAGE" ]]
 }
 
+# True when the repo base image is generated by AISB from declarative package
+# keys in .aisb.env (no hand-written Containerfile, no explicit AISB_BASE_IMAGE).
+aisb_repo_base_is_generated() {
+  [[ "${AISB_REPO_GENERATED_BASE:-0}" == "1" ]]
+}
+
 aisb_repo_config_summary() {
   if [[ "${AISB_REPO_ENV_HAS_BASE_IMAGE:-0}" == "1" ]]; then
     printf '%s sets AISB_BASE_IMAGE=%s\n' "$AISB_REPO_ENV_FILE" "$AISB_REPO_BASE_IMAGE"
+  elif aisb_repo_base_is_generated; then
+    printf '%s declares packages; using generated base %s\n' \
+      "$AISB_REPO_ENV_FILE" "$AISB_REPO_BASE_IMAGE"
   elif aisb_repo_base_is_local_containerfile; then
     if [[ -f "${AISB_REPO_ENV_FILE:-}" ]]; then
       printf '%s has no AISB_BASE_IMAGE; using %s as generated base %s\n' \
@@ -252,13 +399,17 @@ aisb_tool_image_source_summary() {
     printf '%s override\n' "$env_var"
   elif [[ -n "${AISB_REPO_BASE_IMAGE:-}" ]]; then
     if [[ "$tool" == "sb" ]]; then
-      if aisb_repo_base_is_local_containerfile; then
+      if aisb_repo_base_is_generated; then
+        printf 'generated base from declared packages\n'
+      elif aisb_repo_base_is_local_containerfile; then
         printf 'generated from project Containerfile\n'
       else
         printf 'repo base image\n'
       fi
     else
-      if aisb_repo_base_is_local_containerfile; then
+      if aisb_repo_base_is_generated; then
+        printf 'repo-derived tool image from generated base %s\n' "$AISB_REPO_BASE_IMAGE"
+      elif aisb_repo_base_is_local_containerfile; then
         printf 'repo-derived tool image from generated base %s\n' "$AISB_REPO_BASE_IMAGE"
       else
         printf 'repo-derived tool image from base %s\n' "$AISB_REPO_BASE_IMAGE"
@@ -295,6 +446,16 @@ aisb_build_command_hint() {
   printf 'AISB_WORKSPACE=%q %q %q\n' "$root" "$script_dir/build-containers" "$flavor"
 }
 
+# Recipe fingerprint for the default localhost/aisb-base:latest image. Kept as a
+# named helper so the generated-base path and the plain-base path agree exactly.
+aisb_default_base_recipe_fingerprint() {
+  local aisb_root="$1"
+  aisb_hash_files \
+    "$aisb_root/Containerfile.base" \
+    "$aisb_root/container/install-agent-python-tools.sh" \
+    "$aisb_root/container/install-node-npm.sh"
+}
+
 aisb_expected_recipe_fingerprint() {
   local aisb_root="$1"
   local workspace_root="$2"
@@ -304,11 +465,12 @@ aisb_expected_recipe_fingerprint() {
     sb|base)
       if aisb_repo_base_is_local_containerfile; then
         aisb_hash_files "$workspace_root/Containerfile"
+      elif aisb_repo_base_is_generated; then
+        local base_fp
+        base_fp="$(aisb_default_base_recipe_fingerprint "$aisb_root")" || return 1
+        aisb_sha1 "${base_fp}"$'\n'"${AISB_REPO_PACKAGE_SPEC:-}"
       else
-        aisb_hash_files \
-          "$aisb_root/Containerfile.base" \
-          "$aisb_root/container/install-agent-python-tools.sh" \
-          "$aisb_root/container/install-node-npm.sh"
+        aisb_default_base_recipe_fingerprint "$aisb_root"
       fi
       ;;
     claude)
@@ -361,7 +523,9 @@ aisb_tool_uses_managed_image() {
   fi
 
   if [[ "$tool" == "sb" ]]; then
-    [[ -z "${AISB_REPO_BASE_IMAGE:-}" ]] || aisb_repo_base_is_local_containerfile
+    [[ -z "${AISB_REPO_BASE_IMAGE:-}" ]] \
+      || aisb_repo_base_is_local_containerfile \
+      || aisb_repo_base_is_generated
     return
   fi
 

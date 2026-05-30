@@ -1009,8 +1009,8 @@ aisb_extra_mount_resolve() {
   local path
   for path in "$src" "$dst"; do
     case "$path" in
-      *,*|*$'\t'*|*$'\n'*|*\ *)
-        echo "Error: AISB_EXTRA_MOUNTS path contains forbidden whitespace or comma: $path" >&2
+      *,*|*$'\t'*|*$'\n'*)
+        echo "Error: AISB_EXTRA_MOUNTS path contains a forbidden character (comma, tab, or newline): $path" >&2
         exit 1
         ;;
     esac

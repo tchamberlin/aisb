@@ -246,6 +246,11 @@ repo-scoped base image:
 localhost/aisb-<repo-name>-<repo-hash>:latest
 ```
 
+If all a repo needs is a few extra packages, you can skip the `Containerfile`
+entirely and declare them in `.aisb.env` with `AISB_NPM_PACKAGES` and/or
+`AISB_PYTHON_TOOLS` (see the recognized keys below). AISB generates a base image
+with the same repo-scoped tag, layered on `localhost/aisb-base:latest`.
+
 If `.aisb.env` does not already name a base image, interactive builds prompt to
 create or update it with that generated tag:
 
@@ -264,12 +269,33 @@ The file is parsed as data, not sourced as shell. Blank lines and comments are
 allowed. Recognized keys:
 
 - `AISB_BASE_IMAGE` — base image tag (see above).
+- `AISB_NPM_PACKAGES` — whitespace-separated npm package specs installed globally
+  (`npm install -g`) into a generated repo base image. Lets a repo declare the
+  tools it needs without hand-writing a `Containerfile`, e.g.
+  `AISB_NPM_PACKAGES=playwright prettier`.
+- `AISB_PYTHON_TOOLS` — whitespace-separated Python tool specs installed with
+  `uv tool install` into the same generated base, e.g.
+  `AISB_PYTHON_TOOLS=httpie`.
+
+  These two keys take effect only when the repo has no `Containerfile` and no
+  explicit `AISB_BASE_IMAGE` (those paths already give the repo full control, so
+  the package keys are ignored with a warning if combined). When present, AISB
+  compiles them into a generated base image
+  (`localhost/aisb-<repo-name>-<repo-hash>:latest`) layered on
+  `localhost/aisb-base:latest`, builds the default base first if needed, and the
+  agent images derive from it the same way they do for a repo `Containerfile`.
+  The package list is folded into the image's recipe fingerprint, so editing
+  `.aisb.env` triggers the usual stale-image rebuild prompt. Each token is passed
+  verbatim to `npm`/`uv` and validated first: tokens containing a single quote or
+  backslash, or starting with `-`, are rejected to prevent command injection.
 - `AISB_ALLOW_NON_GIT_WORKSPACE` — set to `1` to let agent wrappers run with
   this directory as the workspace even when it is not a git repository.
   Equivalent to setting the host env var of the same name, but scoped to the
   repo via `.aisb.env`.
 - `AISB_EXTRA_MOUNTS` — extra host bind mounts. Each value is one or more
   whitespace-separated entries; the key may also be repeated on multiple lines.
+  A path containing spaces (e.g. an external volume named `T7 Shield`) can be
+  wrapped in single or double quotes so it is treated as one entry.
   Each entry takes one of these forms:
   - `/host/path` — mount at the same path inside the container
   - `/host/path:opts` — same-path mount with custom options
@@ -278,7 +304,8 @@ allowed. Recognized keys:
 
   Default options are `ro`; supported flags are `ro`, `rw`, `z`, `Z`, `noexec`.
   The wrappers always force `nosuid,nodev` and reject:
-  - relative or `..`-bearing paths, paths containing `:`, `,`, or whitespace
+  - relative or `..`-bearing paths, and paths containing `:`, `,`, a tab, or a
+    newline (`:` and `,` are Podman `-v` field separators; spaces are allowed)
   - host paths that don't exist, are symlinks, sit inside the workspace, or
     are broad locations like `/`, `$HOME`, `/etc`, `/tmp` (mount a narrower
     subdirectory instead)
@@ -292,6 +319,7 @@ allowed. Recognized keys:
   AISB_EXTRA_MOUNTS=/home/foo /srv/datasets
   AISB_EXTRA_MOUNTS=/var/tmp/scratch:rw
   AISB_EXTRA_MOUNTS=/srv/cache:/data:rw
+  AISB_EXTRA_MOUNTS=/home/gbtlogs /home/gbtdata "/run/media/me/T7 Shield"
   ```
 
 When a repo-specific base image is active:
