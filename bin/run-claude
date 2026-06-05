@@ -34,9 +34,6 @@ common_ensure_json_object_file "$HOME/.claude/settings.json" "Claude settings"
 CLAUDE_HOME_DIR="${STATE_BASE}/claude/home-claude"
 common_maybe_reset_tool_home "$CLAUDE_HOME_DIR"
 mkdir -p "$CLAUDE_HOME_DIR"
-# Pre-create .config so podman doesn't auto-create it as namespace-root when
-# bind-mounting ~/.config/gh, leaving the parent unwritable to the calling user.
-mkdir -p "$CLAUDE_HOME_DIR/.config"
 
 common_require_mount_path "${CLAUDE_HOME_DIR}" "Claude shared home source path"
 common_require_mount_path "${CLAUDE_HOME_DIR}/.claude" "Claude shared state source path"

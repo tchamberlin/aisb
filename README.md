@@ -56,13 +56,12 @@ The wrappers:
   `$HOME`. Set `AISB_WORKSPACE_READONLY=1` for audit/review/exploration runs
   where the agent should not mutate the repo.
 - forward API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
-  `TOGETHER_API_KEY`, …) and `gh` auth
+  `TOGETHER_API_KEY`, …) and `GH_TOKEN` for GitHub CLI auth when set
 - mount Claude, Codex, and PI shared homes read-write so login, token
   refresh, MCP changes, and atomic config writes persist normally and a single
   login carries across every repo. Agent homes are seeded from host dotfiles on
-  first use, then kept under AISB state. `gh` config is mounted **read-only**
-  in normal runs. On SELinux hosts, wrappers ask before relabeling the specific
-  auth/config paths needed for container access.
+  first use, then kept under AISB state. On SELinux hosts, wrappers ask before
+  relabeling the specific auth/config paths needed for container access.
 - keep durable runtime state under `$XDG_STATE_HOME/claude-podman/` and
   `$XDG_CACHE_HOME/claude-podman/` — agent homes (auth, settings, MCP, sessions)
   are shared across all repos so a single login persists everywhere; per-repo
@@ -159,9 +158,9 @@ the sandbox with sensitive material:
 - **Live credentials inside the container.** Each run has access to API keys
   forwarded via env (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `TOGETHER_API_KEY`, …), per-agent auth files (`~/.claude/.credentials.json`,
-  `~/.codex/auth.json`, `~/.pi/agent/*`), and optionally `GH_TOKEN` /
-  `~/.config/gh`. A prompt-injection in repo content or tool output can, in
-  one command, exfiltrate any of these.
+  `~/.codex/auth.json`, `~/.pi/agent/*`), and optionally `GH_TOKEN`. A
+  prompt-injection in repo content or tool output can, in one command,
+  exfiltrate any of these.
 - **Full network egress.** Containers have unrestricted outbound network. Any
   exfiltration path (DNS, HTTPS, anything else) is open. For one-shot
   `sb` runs you can set `AISB_NO_NETWORK=1` to drop all networking; agent
@@ -171,7 +170,7 @@ the sandbox with sensitive material:
   `127.0.0.1:5173:5173`; binding to `0.0.0.0` can expose the service to other
   machines that can reach the host.
 - **The mounted repo is read-write.** An agent can modify files, commit, and
-  (if `GH_TOKEN` or `gh` auth is present) push malicious commits upstream.
+  (if `GH_TOKEN` is present) push malicious commits upstream.
   `AISB_WORKSPACE_READONLY=1` makes the repo mount read-only for review-style
   runs, but normal coding sessions keep it writable so agents can edit files.
 - **Strict seccomp is not deletion prevention.** `AISB_STRICT_SECCOMP=1` adds
@@ -197,8 +196,8 @@ the sandbox with sensitive material:
 
 Claude and Codex config directories are writable in normal runs because the
 tools may rewrite credentials, settings, and acknowledgements during startup.
-`gh` config remains read-only in normal runs. This does not prevent
-exfiltration of credentials that the current session can read.
+This does not prevent exfiltration of credentials that the current session can
+read.
 
 ## Environment
 
@@ -230,6 +229,7 @@ Per-wrapper overrides:
 | `AISB_ALLOW_DANGEROUS_ROOT=1` | Allow broad workspace roots like `$HOME` or `/` intentionally. Does not permit relabeling. |
 | `AISB_ALLOW_DANGEROUS_RELABEL=1` | With `AISB_RELABEL_WORKSPACE=1`, allow SELinux relabeling of a dangerous root. |
 | `AISB_WORKSPACE_READONLY=1` | Mount the workspace `ro,nosuid,nodev` for audit/review/exploration runs. |
+| `GH_TOKEN`                  | Forward this token for GitHub CLI auth. Host `gh` OAuth state and `GITHUB_TOKEN` are not forwarded. |
 | `AISB_DEBUG=1`             | Include detailed mount/auth/hardening diagnostics in startup logs. |
 | `AISB_QUIET=1`             | Suppress wrapper startup summary logs.                            |
 | `AISB_UPDATE_CHECK=0`      | Disable AISB-managed agent version checks on wrapper startup.      |

@@ -14,8 +14,8 @@
 #   WORKSPACE_VENV_DIR, WORKSPACE_PYTEST_CACHE_DIR,
 #   WORKSPACE_TMP_DIR, WORKSPACE_REPO_VENV_PATH, WORKSPACE_REPO_VENV_MASK_DIR
 #   AUTH_MODE, REPO_MODE
-#   COMMON_PODMAN_ARGS (all shared podman flags: base hardening, tty, gh
-#                       auth passthrough, optional port publishing/seccomp)
+#   COMMON_PODMAN_ARGS (all shared podman flags: base hardening, tty,
+#                       optional GH_TOKEN passthrough, port publishing/seccomp)
 
 if [[ "${_RUN_COMMON_LOADED:-0}" == "1" ]]; then
   return 0
@@ -82,10 +82,6 @@ common_log_startup() {
 
   if [[ -n "${GH_TOKEN:-}" ]]; then
     echo "[aisb:${TOOL}:debug] gh auth: GH_TOKEN env" >&2
-  elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    echo "[aisb:${TOOL}:debug] gh auth: GITHUB_TOKEN env" >&2
-  elif [[ -d "${XDG_CONFIG_HOME:-$HOME/.config}/gh" ]]; then
-    echo "[aisb:${TOOL}:debug] gh auth: mounted ${XDG_CONFIG_HOME:-$HOME/.config}/gh" >&2
   else
     echo "[aisb:${TOOL}:debug] gh auth: none detected" >&2
   fi
@@ -905,14 +901,6 @@ common_maybe_reset_tool_home() {
 _common_append_gh() {
   if [[ -n "${GH_TOKEN:-}" ]]; then
     COMMON_PODMAN_ARGS+=(-e "GH_TOKEN=$GH_TOKEN")
-  elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    COMMON_PODMAN_ARGS+=(-e "GITHUB_TOKEN=$GITHUB_TOKEN")
-  fi
-  local gh_host_config="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
-  if [[ -d "$gh_host_config" ]]; then
-    common_require_mount_path "$gh_host_config" "GitHub CLI config source path"
-    common_require_mount_path "${USER_HOME}/.config/gh" "GitHub CLI config destination path"
-    COMMON_PODMAN_ARGS+=(-v "${gh_host_config}:${USER_HOME}/.config/gh:${AUTH_MODE},nosuid,nodev,noexec")
   fi
 }
 

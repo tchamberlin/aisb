@@ -85,10 +85,6 @@ log_startup() {
 
   if [[ -n "${GH_TOKEN:-}" ]]; then
     echo "[aisb:sb:debug] gh auth: GH_TOKEN env" >&2
-  elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    echo "[aisb:sb:debug] gh auth: GITHUB_TOKEN env" >&2
-  elif [[ -d "$GH_HOST_CONFIG" ]]; then
-    echo "[aisb:sb:debug] gh auth: mounted $GH_HOST_CONFIG" >&2
   else
     echo "[aisb:sb:debug] gh auth: none detected" >&2
   fi
@@ -173,18 +169,10 @@ for var in \
   fi
 done
 
-# GitHub CLI passthrough
+# GitHub CLI passthrough. Only an explicit GH_TOKEN is forwarded.
 GH_OPTS=()
 if [[ -n "${GH_TOKEN:-}" ]]; then
   GH_OPTS+=(-e "GH_TOKEN=$GH_TOKEN")
-elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
-  GH_OPTS+=(-e "GITHUB_TOKEN=$GITHUB_TOKEN")
-fi
-GH_HOST_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
-if [[ -d "$GH_HOST_CONFIG" ]]; then
-  common_require_mount_path "$GH_HOST_CONFIG" "GitHub CLI config source path"
-  common_require_mount_path "/home/sb/.config/gh" "GitHub CLI config destination path"
-  GH_OPTS+=(-v "${GH_HOST_CONFIG}:/home/sb/.config/gh:ro,nosuid,nodev,noexec")
 fi
 
 AGENTS_HOST="$HOME/.agents"
