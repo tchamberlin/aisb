@@ -79,6 +79,7 @@ common_log_startup() {
   fi
 
   echo "[aisb:${TOOL}:debug] seccomp: ${COMMON_SECCOMP_SUMMARY:-podman default}" >&2
+  echo "[aisb:${TOOL}:debug] gpu: ${COMMON_GPU_SUMMARY:-disabled (set AISB_GPU=1)}" >&2
 
   if [[ -n "${GH_TOKEN:-}" ]]; then
     echo "[aisb:${TOOL}:debug] gh auth: GH_TOKEN env" >&2
@@ -370,6 +371,7 @@ common_init() {
   _common_append_agents
   _common_append_extra_mounts
   _common_append_publish_ports
+  _common_append_gpu
   _common_append_seccomp
   common_log_startup
 }
@@ -925,6 +927,27 @@ aisb_validate_publish_port_number() {
   (( port >= 1 && port <= 65535 ))
 }
 
+# Validate a single port field that may be either a single port or an inclusive
+# range (start-end). On success, prints the number of ports the field spans so
+# callers can check host/container range spans match.
+aisb_publish_port_field_span() {
+  local field="$1"
+  local start end
+  if [[ "$field" == *-* ]]; then
+    start="${field%%-*}"
+    end="${field##*-}"
+    # Reject malformed ranges (empty endpoints, extra dashes).
+    [[ "$field" == "$start-$end" ]] || return 1
+    aisb_validate_publish_port_number "$start" || return 1
+    aisb_validate_publish_port_number "$end" || return 1
+    (( start <= end )) || return 1
+    printf '%s' "$(( end - start + 1 ))"
+  else
+    aisb_validate_publish_port_number "$field" || return 1
+    printf '%s' 1
+  fi
+}
+
 aisb_validate_publish_port_spec() {
   local spec="$1"
   if [[ -z "$spec" ]]; then
@@ -982,12 +1005,19 @@ aisb_validate_publish_port_spec() {
     container_port="$f1"
   fi
 
-  if [[ -n "$host_port" ]] && ! aisb_validate_publish_port_number "$host_port"; then
-    echo "Error: AISB_PUBLISH_PORTS host port must be 1-65535: $spec" >&2
-    exit 1
+  local host_span="" container_span=""
+  if [[ -n "$host_port" ]]; then
+    host_span="$(aisb_publish_port_field_span "$host_port")" || {
+      echo "Error: AISB_PUBLISH_PORTS host port must be a port or range (1-65535, start<=end): $spec" >&2
+      exit 1
+    }
   fi
-  if ! aisb_validate_publish_port_number "$container_port"; then
-    echo "Error: AISB_PUBLISH_PORTS container port must be 1-65535: $spec" >&2
+  container_span="$(aisb_publish_port_field_span "$container_port")" || {
+    echo "Error: AISB_PUBLISH_PORTS container port must be a port or range (1-65535, start<=end): $spec" >&2
+    exit 1
+  }
+  if [[ -n "$host_span" && "$host_span" != "$container_span" ]]; then
+    echo "Error: AISB_PUBLISH_PORTS host and container ranges must span the same number of ports: $spec" >&2
     exit 1
   fi
 }
@@ -1171,6 +1201,44 @@ _common_append_extra_mounts() {
     COMMON_PODMAN_ARGS+=(-v "${src}:${dst}:${opts}")
     COMMON_EXTRA_MOUNT_LINES+=("$src -> $dst ($opts)")
   done
+}
+
+# Opt-in GPU passthrough (AISB_GPU=1). Exposes the host DRM render node so
+# Chromium/Mesa can use the iGPU for hardware-accelerated WebGL/WebGL2 instead
+# of falling back to llvmpipe/SwiftShader. Off by default — it punches a host
+# device into the otherwise device-less sandbox, so it's strictly opt-in.
+#
+#   --device /dev/dri      : expose card*/renderD* nodes (works with --read-only;
+#                            devices live on podman's own /dev tmpfs).
+#   --group-add keep-groups: rootless podman maps the host user via --userns=
+#                            keep-id, which drops supplementary GIDs; this annotation
+#                            (run.oci.keep_original_groups=1) keeps the host 'render'
+#                            group so the container user can open renderD128. Without
+#                            it, opening the node fails with EACCES that looks like
+#                            "no GPU". The host user must be in the 'render' group.
+#
+# Override the device path with AISB_GPU_DEVICE (default /dev/dri). Under
+# SELinux-enforcing hosts the container's confined type can't reach the device
+# node's label, so the device is relabeled shareable via the :z-style device
+# rule; if that's still denied, set AISB_GPU_DISABLE_LABEL=1 to drop SELinux
+# confinement for the run (weaker isolation — last resort).
+_common_append_gpu() {
+  [[ "${AISB_GPU:-0}" == "1" ]] || return 0
+  local dev="${AISB_GPU_DEVICE:-/dev/dri}"
+  if [[ ! -e "$dev" ]]; then
+    echo "warn: AISB_GPU=1 but host device $dev does not exist; skipping GPU passthrough" >&2
+    COMMON_GPU_SUMMARY="requested but $dev missing"
+    return 0
+  fi
+  COMMON_PODMAN_ARGS+=(
+    --device "$dev"
+    --group-add keep-groups
+  )
+  COMMON_GPU_SUMMARY="$dev (+keep-groups)"
+  if [[ "${AISB_GPU_DISABLE_LABEL:-0}" == "1" ]]; then
+    COMMON_PODMAN_ARGS+=(--security-opt label=disable)
+    COMMON_GPU_SUMMARY="$COMMON_GPU_SUMMARY, label=disable"
+  fi
 }
 
 _common_append_seccomp() {

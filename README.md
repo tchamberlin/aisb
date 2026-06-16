@@ -89,6 +89,19 @@ The wrappers:
   AISB_PUBLISH_PORTS=127.0.0.1:5173:5173 codex
   ```
 
+  Each field accepts an inclusive range (`start-end`) as well as a single
+  port, so you can reserve a band up front and let the agent run an arbitrary
+  dev server on any port in it without knowing the exact port ahead of time:
+
+  ```sh
+  AISB_PUBLISH_PORTS=127.0.0.1:3000-3010:3000-3010 codex
+  ```
+
+  When both the host and container sides are ranges they must span the same
+  number of ports. Once a loopback port is published, browsers and
+  systemd-resolved resolve any `*.localhost` name to loopback, so you can reach
+  it at e.g. `http://myrepo.localhost:3000` without editing `/etc/hosts`.
+
   Port publishing is a `podman run` option, so it cannot be added to an
   already-running container.
 - disable Claude/Codex self-update paths inside the container. AISB-managed
@@ -239,10 +252,13 @@ Per-wrapper overrides:
 | `AISB_MEMORY`              | `--memory` cap (default `8g`).                                        |
 | `AISB_CPUS`                | `--cpus` cap (default `4`).                                           |
 | `AISB_PIDS`                | `--pids-limit` cap (default `1024`).                                  |
-| `AISB_PUBLISH_PORTS`       | Whitespace-separated Podman `-p` specs for new runs, e.g. `127.0.0.1:5173:5173`. |
+| `AISB_PUBLISH_PORTS`       | Whitespace-separated Podman `-p` specs for new runs, e.g. `127.0.0.1:5173:5173`. Each port field may be an inclusive range (`127.0.0.1:3000-3010:3000-3010`); host/container ranges must span equal counts. |
 | `AISB_NO_NETWORK=1`        | `run-sb` only: disable all networking (`--network=none`).             |
 | `AISB_STRICT_SECCOMP=1`    | Apply `seccomp-strict.json` (extra denies on top of podman default).  |
 | `AISB_SECCOMP_PROFILE`     | Path to custom seccomp profile (overrides `seccomp-strict.json`).     |
+| `AISB_GPU=1`               | Pass the host GPU through: `--device /dev/dri --group-add keep-groups`. Lets Chromium/Mesa use the iGPU for hardware WebGL (else llvmpipe/SwiftShader). Host user must be in the `render` group. Off by default. |
+| `AISB_GPU_DEVICE`          | DRM device to expose when `AISB_GPU=1` (default `/dev/dri`).          |
+| `AISB_GPU_DISABLE_LABEL=1` | With `AISB_GPU=1`, also add `--security-opt label=disable` for SELinux-enforcing hosts that block device access. Last resort — prefer `sudo setsebool -P container_use_devices 1`, which permits device access while keeping the container SELinux-confined. |
 
 For a first-time Codex OAuth login, run:
 
