@@ -56,7 +56,9 @@ The wrappers:
   `$HOME`. Set `AISB_WORKSPACE_READONLY=1` for audit/review/exploration runs
   where the agent should not mutate the repo.
 - forward API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
-  `TOGETHER_API_KEY`, …) and `GH_TOKEN` for GitHub CLI auth when set
+  `TOGETHER_API_KEY`, …), `VISUAL`/`EDITOR` editor preferences, and `GH_TOKEN`
+  for GitHub CLI auth when set. If `EDITOR` is unset on the host, wrappers set
+  `EDITOR=vim` inside the container.
 - mount Claude, Codex, and PI shared homes read-write so login, token
   refresh, MCP changes, and atomic config writes persist normally and a single
   login carries across every repo. Agent homes are seeded from host dotfiles on

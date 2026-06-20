@@ -6,7 +6,7 @@ FROM registry.fedoraproject.org/fedora-minimal@sha256:af9f254d2644fc392ed1948d7d
 # Single microdnf call to minimize layers; clean metadata at the end.
 RUN microdnf install -y --setopt=install_weak_deps=0 \
       ca-certificates curl git openssh-clients bash which \
-      ripgrep fd-find fzf tree less jq \
+      ripgrep fd-find fzf tree less jq vim-enhanced \
       gawk sed patch diffutils findutils ShellCheck xxd \
       unzip zip tar xz bzip2 gzip \
       pdfgrep poppler-utils \

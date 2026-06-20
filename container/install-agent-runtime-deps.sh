@@ -33,7 +33,7 @@ install_gh_from_official_repo() {
 if command -v microdnf >/dev/null 2>&1; then
   microdnf install -y --setopt=install_weak_deps=0 --allowerasing \
     ca-certificates curl git openssh-clients bash which \
-    ripgrep less jq \
+    ripgrep less jq vim-enhanced \
     unzip zip tar xz gzip \
     patch diffutils findutils coreutils \
     procps-ng iproute
@@ -49,7 +49,7 @@ if command -v microdnf >/dev/null 2>&1; then
 elif command -v dnf >/dev/null 2>&1; then
   dnf install -y --setopt=install_weak_deps=0 --allowerasing \
     ca-certificates curl git openssh-clients bash which \
-    ripgrep less jq \
+    ripgrep less jq vim-enhanced \
     unzip zip tar xz gzip \
     patch diffutils findutils coreutils \
     procps-ng iproute
@@ -66,7 +66,7 @@ elif command -v apt-get >/dev/null 2>&1; then
   apt-get update
   apt-get install -y --no-install-recommends \
     ca-certificates curl git openssh-client bash \
-    ripgrep less jq \
+    ripgrep less jq vim \
     unzip zip tar xz-utils gzip \
     patch diffutils findutils coreutils \
     procps iproute2
@@ -81,7 +81,7 @@ elif command -v apt-get >/dev/null 2>&1; then
 elif command -v apk >/dev/null 2>&1; then
   apk add --no-cache \
     ca-certificates curl git openssh-client bash which \
-    ripgrep less jq github-cli \
+    ripgrep less jq vim github-cli \
     unzip zip tar xz gzip \
     patch diffutils findutils coreutils \
     procps iproute2

@@ -359,6 +359,15 @@ common_init() {
     -w "$ROOT"
   )
 
+  # Pi sources its optional env file after common_init, so it appends editor
+  # vars in run-pi once file-scoped overrides are visible.
+  if [[ "$TOOL" != "pi" ]]; then
+    COMMON_PODMAN_ARGS+=(-e "EDITOR=${EDITOR:-vim}")
+    if [[ -n "${VISUAL:-}" ]]; then
+      COMMON_PODMAN_ARGS+=(-e "VISUAL=$VISUAL")
+    fi
+  fi
+
   if [[ "${AISB_MOUNT_USER_HOME_TMPFS:-1}" == "1" ]]; then
     COMMON_PODMAN_ARGS+=(
       --tmpfs "${USER_HOME}:rw,nosuid,nodev,size=256m"

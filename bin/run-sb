@@ -157,13 +157,14 @@ chmod 1777 "$TMP_DIR"
 common_prune_old_dirs "${STATE_BASE}/sb/${HASH}/repo-venv-masks" "$STATE_BASE" -mtime +7
 common_prune_old_dirs "${STATE_BASE}/sb/${HASH}/tmp" "$STATE_BASE" -mmin +1440
 
-# Forward common API keys + editor prefs
-ENV_OPTS=()
+# Forward common API keys + editor prefs. EDITOR always has a usable default
+# so tools that shell out for commits or prompts have deterministic behavior.
+ENV_OPTS=(-e "EDITOR=${EDITOR:-vim}")
 for var in \
     ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY \
     OPENROUTER_API_KEY TOGETHER_API_KEY GROQ_API_KEY \
     HF_TOKEN QWEN_MODEL \
-    VISUAL EDITOR; do
+    VISUAL; do
   if [[ -n "${!var:-}" ]]; then
     ENV_OPTS+=(-e "${var}=${!var}")
   fi

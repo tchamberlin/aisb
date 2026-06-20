@@ -109,10 +109,11 @@ if [[ -e "$PI_ENV_FILE" ]]; then
   PI_ENV_FILE_LOADED=1
 fi
 
-# Forward API keys and editor preferences that pi reads
-PI_OPTS=()
-PI_FORWARDED_VARS=()
-for var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY TOGETHER_API_KEY PI_CODING_AGENT_DIR PI_TELEMETRY PI_CACHE_RETENTION PI_SKIP_VERSION_CHECK VISUAL EDITOR; do
+# Forward pi-specific optional env. This runs after pi.env is sourced, so
+# file-scoped editor preferences override host env before falling back to vim.
+PI_OPTS=(-e "EDITOR=${EDITOR:-vim}")
+PI_FORWARDED_VARS=(EDITOR)
+for var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY TOGETHER_API_KEY PI_CODING_AGENT_DIR PI_TELEMETRY PI_CACHE_RETENTION PI_SKIP_VERSION_CHECK VISUAL; do
   if [[ -n "${!var:-}" ]]; then
     PI_OPTS+=(-e "${var}=${!var}")
     PI_FORWARDED_VARS+=("$var")
