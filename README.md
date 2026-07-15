@@ -27,7 +27,7 @@ fresh container; only the current repo and per-agent auth are mounted.
 
 ```sh
 ./install.sh                # symlinks ~/.local/bin/{claude,codex,pi,sb,aisb-build}
-aisb-build all              # base + three flavors (parallel)
+aisb-build all              # ensure base exists, then build three flavors (parallel)
 aisb-build --no-cache       # rebuild without the podman layer cache
 AISB_BUILD_SEQUENTIAL=1 aisb-build all
 ```
@@ -285,7 +285,8 @@ entirely and declare them in `.aisb.env` with `AISB_NPM_PACKAGES` and/or
 with the same repo-scoped tag, layered on `localhost/aisb-base:latest`.
 
 If `.aisb.env` does not already name a base image, interactive builds prompt to
-create or update it with that generated tag:
+create or update it with that generated tag after the managed base image is
+available:
 
 ```sh
 AISB_BASE_IMAGE=localhost/aisb-<repo-name>-<repo-hash>:latest
@@ -318,9 +319,11 @@ allowed. Recognized keys:
   `localhost/aisb-base:latest`, builds the default base first if needed, and the
   agent images derive from it the same way they do for a repo `Containerfile`.
   The package list is folded into the image's recipe fingerprint, so editing
-  `.aisb.env` triggers the usual stale-image rebuild prompt. Each token is passed
-  verbatim to `npm`/`uv` and validated first: tokens containing a single quote or
-  backslash, or starting with `-`, are rejected to prevent command injection.
+  `.aisb.env` marks the generated base stale. Tool and `all` builds prompt before
+  refreshing a stale existing base and default to reusing it. Each token is
+  passed verbatim to `npm`/`uv` and validated first: tokens containing a single
+  quote or backslash, or starting with `-`, are rejected to prevent command
+  injection.
 - `AISB_ALLOW_NON_GIT_WORKSPACE` — set to `1` to let agent wrappers run with
   this directory as the workspace even when it is not a git repository.
   Equivalent to setting the host env var of the same name, but scoped to the
@@ -367,6 +370,11 @@ When a repo-specific base image is active:
 - `bin/build-containers` uses the repo base as the `BASE_IMAGE` build arg for
   derived tool images and tags those images with the same repo-scoped names the
   wrappers expect.
+- When a derived tool or `all` build sees an existing managed base image that
+  looks stale, interactive runs ask whether to refresh it and default to `no`.
+  Non-interactive runs warn and reuse the existing base. If the base image is
+  missing, AISB builds managed bases first because Podman needs a concrete image
+  for `FROM`.
 
 Derived tool images install a shared agent toolbox on top of the repo base,
 without changing the repo base image itself. The `codex` and `pi` images also

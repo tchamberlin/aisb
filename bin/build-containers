@@ -4,9 +4,10 @@ set -euo pipefail
 # Usage:
 #   build-containers [--no-cache] [base|claude|codex|pi|all]
 #
-# Defaults to `all` when called with no argument. For `all`, the base is
-# built first and then the three flavor images build in parallel by default.
-# Output from parallel builds is prefixed with [flavor] so lines stay
+# Defaults to `all` when called with no argument. For `all`, the base image is
+# ensured first, then the three flavor images build in parallel by default.
+# Stale existing base images are refreshed only after an interactive [y/N]
+# prompt. Output from parallel builds is prefixed with [flavor] so lines stay
 # attributable.
 #
 # Env vars:
@@ -116,6 +117,9 @@ WORKSPACE_ROOT="$(realpath "$WORKSPACE_ROOT")"
 WORKSPACE_HASH="$(aisb_sha1_10 "$WORKSPACE_ROOT")"
 aisb_load_repo_env "$WORKSPACE_ROOT"
 
+PENDING_REPO_BASE_IMAGE_PERSIST=0
+PENDING_REPO_BASE_IMAGE_PERSIST_DONE=0
+
 maybe_prompt_persist_repo_base_image() {
   [[ -z "${BASE_IMAGE:-}" ]] || return 0
   [[ -n "${AISB_REPO_CONTAINERFILE:-}" ]] || return 0
@@ -147,9 +151,8 @@ maybe_prompt_persist_repo_base_image() {
       ;;
   esac
 
-  aisb_append_repo_base_image "$WORKSPACE_ROOT" "$AISB_REPO_BASE_IMAGE"
-  echo "Wrote $env_file"
-  AISB_REPO_ENV_HAS_BASE_IMAGE=1
+  PENDING_REPO_BASE_IMAGE_PERSIST=1
+  echo "Will write $env_file after base image '$AISB_REPO_BASE_IMAGE' is available."
 }
 
 maybe_prompt_persist_repo_base_image
@@ -191,6 +194,22 @@ repo_base_is_local_containerfile() {
 
 repo_base_is_generated() {
   [[ "$BASE_IMAGE_EXPLICIT" != "1" ]] && aisb_repo_base_is_generated
+}
+
+repo_base_is_external_image() {
+  [[ -n "${AISB_REPO_BASE_IMAGE:-}" && "$BASE_IMAGE_EXPLICIT" != "1" ]] \
+    && ! repo_base_is_local_containerfile && ! repo_base_is_generated
+}
+
+persist_repo_base_image_if_requested() {
+  [[ "$PENDING_REPO_BASE_IMAGE_PERSIST" == "1" ]] || return 0
+  [[ "$PENDING_REPO_BASE_IMAGE_PERSIST_DONE" != "1" ]] || return 0
+  podman image exists "$AISB_REPO_BASE_IMAGE" || return 0
+
+  aisb_append_repo_base_image "$WORKSPACE_ROOT" "$AISB_REPO_BASE_IMAGE"
+  echo "Wrote $AISB_REPO_ENV_FILE"
+  AISB_REPO_ENV_HAS_BASE_IMAGE=1
+  PENDING_REPO_BASE_IMAGE_PERSIST_DONE=1
 }
 
 # Build the default localhost/aisb-base:latest if missing or stale. The generated
@@ -281,8 +300,7 @@ image_label() {
 managed_base_image_is_stale() {
   local actual_recipe expected_recipe
 
-  if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && "$BASE_IMAGE_EXPLICIT" != "1" ]] \
-    && ! repo_base_is_local_containerfile && ! repo_base_is_generated; then
+  if repo_base_is_external_image; then
     return 1
   fi
 
@@ -296,24 +314,56 @@ managed_base_image_is_stale() {
   [[ -z "$actual_recipe" || "$actual_recipe" != "$expected_recipe" ]]
 }
 
-ensure_base_image() {
-  if podman image exists "$BASE_IMAGE_TAG" && ! managed_base_image_is_stale; then
+BASE_STALE_REFRESH_ASKED=0
+
+maybe_prompt_refresh_stale_base_image() {
+  local consumer="${1:-tool}"
+  local build_cmd reply
+
+  managed_base_image_is_stale || return 0
+  if [[ "${BASE_STALE_REFRESH_ASKED:-0}" == "1" ]]; then
+    return 0
+  fi
+  BASE_STALE_REFRESH_ASKED=1
+
+  build_cmd="$(aisb_build_command_hint "$SCRIPT_DIR" "$WORKSPACE_ROOT" base)"
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    echo "warn: base image '$BASE_IMAGE_TAG' may be stale; reusing it for $consumer build" >&2
+    echo "warn: refresh it explicitly with: $build_cmd" >&2
     return 0
   fi
 
-  if [[ -n "${AISB_REPO_BASE_IMAGE:-}" && "$BASE_IMAGE_EXPLICIT" != "1" ]] \
-    && ! repo_base_is_local_containerfile && ! repo_base_is_generated; then
+  echo "Base image '$BASE_IMAGE_TAG' may be stale." >&2
+  printf "Refresh it now with \`%s\` before the %s build? [y/N] " "$build_cmd" "$consumer" >&2
+  read -r reply || reply=""
+  case "$reply" in
+    y|Y|yes|Yes|YES)
+      build_one base
+      ;;
+    *)
+      echo "Reusing existing base image: $BASE_IMAGE_TAG" >&2
+      ;;
+  esac
+}
+
+ensure_base_image_exists() {
+  local consumer="${1:-tool}"
+
+  if podman image exists "$BASE_IMAGE_TAG"; then
+    maybe_prompt_refresh_stale_base_image "$consumer"
+    persist_repo_base_image_if_requested
+    return 0
+  fi
+
+  if repo_base_is_external_image; then
     echo "error: repo base image '$BASE_IMAGE_TAG' from $WORKSPACE_ROOT/.aisb.env was not found" >&2
     echo "Build or pull that image first, then retry." >&2
     return 1
   fi
 
-  if podman image exists "$BASE_IMAGE_TAG"; then
-    echo "Base image '$BASE_IMAGE_TAG' is stale; rebuilding it first."
-  else
-    echo "Base image '$BASE_IMAGE_TAG' not found; building it first."
-  fi
+  echo "Base image '$BASE_IMAGE_TAG' not found; building it first."
   build_one base
+  persist_repo_base_image_if_requested
 }
 
 build_one() {
@@ -370,7 +420,7 @@ build_one() {
         tag="aisb-claude:latest"
       fi
       flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
-      ensure_base_image
+      ensure_base_image_exists "$flavor"
       base_image_id="$(podman image inspect --format '{{.Id}}' "$BASE_IMAGE_TAG")"
       local claude_version
       claude_version="$(resolve_npm_version @anthropic-ai/claude-code)"
@@ -384,7 +434,7 @@ build_one() {
         tag="aisb-codex:latest"
       fi
       flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
-      ensure_base_image
+      ensure_base_image_exists "$flavor"
       base_image_id="$(podman image inspect --format '{{.Id}}' "$BASE_IMAGE_TAG")"
       local codex_version
       codex_version="$(resolve_npm_version @openai/codex)"
@@ -398,7 +448,7 @@ build_one() {
         tag="aisb-pi:latest"
       fi
       flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
-      ensure_base_image
+      ensure_base_image_exists "$flavor"
       base_image_id="$(podman image inspect --format '{{.Id}}' "$BASE_IMAGE_TAG")"
       local pi_version
       pi_version="$(resolve_npm_version @earendil-works/pi-coding-agent)"
@@ -427,6 +477,10 @@ build_one() {
     -t "$tag" \
     -f "$containerfile" \
     "$build_context"
+
+  if [[ "$flavor" == "base" ]]; then
+    persist_repo_base_image_if_requested
+  fi
 }
 
 build_all_sequential() {
@@ -463,7 +517,7 @@ build_all_parallel() {
 
 case "$FLAVOR" in
   all)
-    build_one base
+    ensure_base_image_exists all
     if [[ "${AISB_BUILD_SEQUENTIAL:-0}" == "1" ]]; then
       build_all_sequential
     else
