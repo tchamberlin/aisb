@@ -337,6 +337,12 @@ common_init() {
     -e "NPM_CONFIG_CACHE=/tmp/npm-cache"
     -e "NPM_CONFIG_FUND=false"
     -e "NPM_CONFIG_UPDATE_NOTIFIER=false"
+    # The durable agent home can contain host/root-owned XDG files. Chromium's
+    # headed crash reporter aborts before launch when $HOME/.config is not
+    # writable, so keep generic per-run XDG config in the already-private,
+    # writable /tmp mount. Tool wrappers may override this when they own a
+    # writable persistent config directory (run-claude does).
+    -e "XDG_CONFIG_HOME=/tmp/xdg-config"
     -e "XDG_CACHE_HOME=/aisb-${TOOL}/cache"
     -e "XDG_STATE_HOME=/aisb-${TOOL}/state"
     -e "UV_CACHE_DIR=/aisb-${TOOL}/uv-cache"
