@@ -1,8 +1,8 @@
 # shellcheck shell=bash
-# Shared helpers for bin/run-{claude,codex,pi}. Sourced, not executed.
+# Shared helpers for bin/run-{claude,codex,pi,herdr}. Sourced, not executed.
 #
 # Callers must set these before calling common_init:
-#   TOOL       — "claude" | "codex" | "pi" (used in paths + labels)
+#   TOOL       — "claude" | "codex" | "pi" | "herdr" (used in paths + labels)
 #   USER_NAME  — container user login name (e.g. "sb", "codex")
 #   USER_HOME  — absolute home path inside the container
 #
@@ -93,6 +93,7 @@ common_tool_package_name() {
     claude) printf '%s\n' "@anthropic-ai/claude-code" ;;
     codex)  printf '%s\n' "@openai/codex" ;;
     pi)     printf '%s\n' "@earendil-works/pi-coding-agent" ;;
+    herdr)  printf '%s\n' "herdr" ;;
     *) return 1 ;;
   esac
 }
@@ -146,6 +147,30 @@ common_latest_npm_version_cached() {
   printf '%s\n' "$latest"
 }
 
+# Herdr is not distributed via npm (the npm name is a reserved placeholder);
+# its public latest release lives in the herdr.dev manifest.
+common_latest_herdr_version_cached() {
+  local cache_file ttl latest
+
+  ttl="$(common_update_check_ttl_seconds)"
+  cache_file="$(common_update_check_cache_file herdr)"
+
+  if common_cache_file_is_fresh "$cache_file" "$ttl"; then
+    sed -n '1p' "$cache_file"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$cache_file")"
+  # awk's early exit can close the pipe before curl finishes; under pipefail
+  # that reads as failure even when the version was captured, so rescue it.
+  latest="$(curl -fsSL --retry 2 --connect-timeout 5 --max-time 10 https://herdr.dev/latest.json 2>/dev/null \
+    | awk -F'"' '/^[[:space:]]*"version"[[:space:]]*:/ { print $4; exit }' || true)"
+  [[ -n "$latest" ]] || return 1
+
+  printf '%s\n' "$latest" > "$cache_file"
+  printf '%s\n' "$latest"
+}
+
 common_maybe_prompt_tool_update() {
   local package current latest flavor hint reply cache_file ttl
 
@@ -155,7 +180,7 @@ common_maybe_prompt_tool_update() {
   # again — both prompts run the same build-containers command.
   [[ "${COMMON_REBUILD_PROMPT_SHOWN:-0}" == "1" ]] && return 0
   case "$TOOL" in
-    claude|codex|pi) ;;
+    claude|codex|pi|herdr) ;;
     *) return 0 ;;
   esac
 
@@ -173,7 +198,11 @@ common_maybe_prompt_tool_update() {
   current="$(common_image_label "$IMAGE" "io.aisb.tool.version")"
   [[ -n "$current" && "$current" != "<no value>" && "$current" != "unknown" ]] || return 0
 
-  latest="$(common_latest_npm_version_cached "$package" || true)"
+  if [[ "$TOOL" == "herdr" ]]; then
+    latest="$(common_latest_herdr_version_cached || true)"
+  else
+    latest="$(common_latest_npm_version_cached "$package" || true)"
+  fi
   [[ -n "$latest" && "$latest" != "$current" ]] || return 0
 
   flavor="$(aisb_managed_image_build_flavor "$TOOL")"

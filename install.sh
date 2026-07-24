@@ -29,7 +29,7 @@ install_link() {
   echo "linked: $link -> $target"
 }
 
-AGENTS=(claude codex pi sb)
+AGENTS=(claude codex pi herdr sb)
 
 for agent in "${AGENTS[@]}"; do
   install_link "$agent" "$REPO/bin/run-$agent"

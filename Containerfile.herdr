@@ -1,0 +1,75 @@
+ARG BASE_IMAGE=localhost/aisb-base:latest
+FROM ${BASE_IMAGE}
+
+ENV NPM_CONFIG_CACHE=/tmp/npm-cache \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
+
+COPY --chmod=0755 container/install-agent-runtime-deps.sh /usr/local/bin/aisb-install-agent-runtime-deps
+COPY --chmod=0755 container/install-agent-python-tools.sh /usr/local/bin/aisb-install-agent-python-tools
+COPY --chmod=0755 container/install-node-npm.sh /usr/local/bin/aisb-install-node-npm
+RUN /usr/local/bin/aisb-install-agent-runtime-deps \
+ && /usr/local/bin/aisb-install-agent-python-tools ruff ty prek \
+ && /usr/local/bin/aisb-install-node-npm \
+ && rm /usr/local/bin/aisb-install-agent-runtime-deps /usr/local/bin/aisb-install-agent-python-tools /usr/local/bin/aisb-install-node-npm
+
+# Herdr ships as a prebuilt static binary released through the herdr.dev
+# manifest (https://herdr.dev/latest.json). build-containers resolves
+# HERDR_VERSION/HERDR_URL from that manifest so the image pins one exact
+# release for the build host's architecture.
+ARG HERDR_VERSION=unknown
+ARG HERDR_URL=unknown
+LABEL io.aisb.tool=herdr \
+      io.aisb.tool.package="herdr" \
+      io.aisb.tool.version="${HERDR_VERSION}"
+RUN echo "herdr version: ${HERDR_VERSION}" \
+ && test "${HERDR_VERSION}" != "unknown" \
+ && test "${HERDR_URL}" != "unknown" \
+ && mkdir -p /usr/local/share/aisb \
+ && printf '%s\n' "${HERDR_VERSION}" > /usr/local/share/aisb/herdr-version \
+ && curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 "${HERDR_URL}" -o /usr/local/bin/herdr \
+ && chmod 0755 /usr/local/bin/herdr
+
+# The herd: Herdr is an agent multiplexer, so this flavor bundles the same
+# three agents the standalone flavors ship (claude, codex, pi).
+ARG CLAUDE_VERSION=unknown
+# Claude is installed via the upstream curl|bash installer. Accepted as
+# standard practice for this vendor; pinning is left to CLAUDE_VERSION as a
+# cache-busting key (install.sh fetches latest at build time), matching
+# Containerfile.claude.
+RUN echo "claude-code cache key: ${CLAUDE_VERSION}" \
+ && test "${CLAUDE_VERSION}" != "unknown" \
+ && printf '%s\n' "${CLAUDE_VERSION}" > /usr/local/share/aisb/claude-version \
+ && bash -lc 'set -euo pipefail; \
+      export HOME=/opt/claude-staging; \
+      export PATH="$HOME/.local/bin:$PATH"; \
+      mkdir -p "$HOME" /opt/claude/bin; \
+      curl -fsSL https://claude.ai/install.sh | bash; \
+      install -m 0755 "$(readlink -f "$HOME/.local/bin/claude")" /opt/claude/bin/claude; \
+      rm -rf /opt/claude-staging'
+
+ARG CODEX_VERSION=unknown
+ARG PI_VERSION=unknown
+RUN echo "codex version: ${CODEX_VERSION}" \
+ && echo "pi-coding-agent version: ${PI_VERSION}" \
+ && test "${CODEX_VERSION}" != "unknown" \
+ && test "${PI_VERSION}" != "unknown" \
+ && printf '%s\n' "${CODEX_VERSION}" > /usr/local/share/aisb/codex-version \
+ && printf '%s\n' "${PI_VERSION}" > /usr/local/share/aisb/pi-version \
+ && npm install -g "@openai/codex@${CODEX_VERSION}" "@earendil-works/pi-coding-agent@${PI_VERSION}" \
+ && rm -rf "$NPM_CONFIG_CACHE"
+
+# Claude's installer records installMethod=native and expects the binary at
+# $HOME/.local/bin/claude. Materialize that symlink on each start because the
+# wrapper mounts a runtime home over the image's home directory, then hand
+# off to herdr.
+RUN printf '%s\n' \
+      '#!/bin/sh' \
+      'set -e' \
+      'mkdir -p "$HOME/.local/bin"' \
+      'ln -sfn /opt/claude/bin/claude "$HOME/.local/bin/claude"' \
+      'exec /usr/local/bin/herdr "$@"' \
+    > /usr/local/bin/herdr-entrypoint \
+ && chmod 0755 /usr/local/bin/herdr-entrypoint
+
+ENTRYPOINT ["/usr/local/bin/herdr-entrypoint"]

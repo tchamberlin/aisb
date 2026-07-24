@@ -320,6 +320,7 @@ aisb_tool_default_image() {
     claude) printf '%s\n' "aisb-claude:latest" ;;
     codex)  printf '%s\n' "aisb-codex:latest" ;;
     pi)     printf '%s\n' "aisb-pi:latest" ;;
+    herdr)  printf '%s\n' "aisb-herdr:latest" ;;
     *)
       echo "error: unknown tool '$1'" >&2
       return 2
@@ -333,6 +334,7 @@ aisb_tool_image_env_var() {
     claude) printf '%s\n' "CLAUDE_IMAGE" ;;
     codex)  printf '%s\n' "CODEX_IMAGE" ;;
     pi)     printf '%s\n' "PI_IMAGE" ;;
+    herdr)  printf '%s\n' "HERDR_IMAGE" ;;
     *)
       echo "error: unknown tool '$1'" >&2
       return 2
@@ -493,6 +495,13 @@ aisb_expected_recipe_fingerprint() {
         "$aisb_root/container/install-agent-runtime-deps.sh" \
         "$aisb_root/container/install-node-npm.sh"
       ;;
+    herdr)
+      aisb_hash_files \
+        "$aisb_root/Containerfile.herdr" \
+        "$aisb_root/container/install-agent-python-tools.sh" \
+        "$aisb_root/container/install-agent-runtime-deps.sh" \
+        "$aisb_root/container/install-node-npm.sh"
+      ;;
     *)
       echo "error: unknown tool '$tool' for recipe fingerprint" >&2
       return 2
@@ -506,6 +515,7 @@ aisb_managed_image_build_flavor() {
     claude) printf '%s\n' "claude" ;;
     codex)  printf '%s\n' "codex" ;;
     pi)     printf '%s\n' "pi" ;;
+    herdr)  printf '%s\n' "herdr" ;;
     *)
       echo "error: unknown tool '$1'" >&2
       return 2
@@ -536,7 +546,7 @@ aisb_expected_base_image_for_tool() {
   local tool="$1"
 
   case "$tool" in
-    claude|codex|pi)
+    claude|codex|pi|herdr)
       if [[ -n "${AISB_REPO_BASE_IMAGE:-}" ]]; then
         printf '%s\n' "$AISB_REPO_BASE_IMAGE"
       else

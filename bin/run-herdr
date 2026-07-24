@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_SOURCE" ]]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+  SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+  [[ "$SCRIPT_SOURCE" == /* ]] || SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+
+TOOL="herdr"
+USER_NAME="aisb-$TOOL"
+USER_HOME="/home/$USER_NAME"
+AISB_MOUNT_USER_HOME_TMPFS=0
+
+# shellcheck source=bin/_run-common.sh
+source "$SCRIPT_DIR/_run-common.sh"
+common_init
+
+HERDR_HOME_DIR="${STATE_BASE}/herdr/home-herdr"
+common_maybe_reset_tool_home "$HERDR_HOME_DIR"
+mkdir -p "$HERDR_HOME_DIR"
+
+common_require_mount_path "$HERDR_HOME_DIR" "Herdr shared home source path"
+
+common_check_image
+
+# Herdr multiplexes the bundled agents (claude, codex, pi), so seed each
+# agent's state from host config on first use — the same seeding the
+# standalone wrappers do, into one shared durable herdr home. After that the
+# agents' state lives in this home and survives container removal. Note this
+# copy is independent from the per-tool homes used by run-claude/codex/pi.
+
+# Herdr's own config, if the host has one.
+if [[ ! -e "$HERDR_HOME_DIR/.config/herdr" && -d "${XDG_CONFIG_HOME:-$HOME/.config}/herdr" ]]; then
+  mkdir -p "$HERDR_HOME_DIR/.config"
+  cp -a "${XDG_CONFIG_HOME:-$HOME/.config}/herdr" "$HERDR_HOME_DIR/.config/herdr"
+fi
+
+# Claude.
+mkdir -p "$HERDR_HOME_DIR/.claude"
+if [[ ! -e "$HERDR_HOME_DIR/.claude.json" && -s "$HOME/.claude.json" ]]; then
+  cp -p "$HOME/.claude.json" "$HERDR_HOME_DIR/.claude.json"
+fi
+common_ensure_json_object_file "$HERDR_HOME_DIR/.claude.json" "Claude shared config"
+if [[ ! -e "$HERDR_HOME_DIR/.claude/settings.json" && -f "$HOME/.claude/settings.json" ]]; then
+  cp -p "$HOME/.claude/settings.json" "$HERDR_HOME_DIR/.claude/settings.json"
+fi
+common_ensure_json_object_file "$HERDR_HOME_DIR/.claude/settings.json" "Claude shared settings"
+if [[ ! -e "$HERDR_HOME_DIR/.claude/.credentials.json" && -f "$HOME/.claude/.credentials.json" ]]; then
+  cp -p "$HOME/.claude/.credentials.json" "$HERDR_HOME_DIR/.claude/.credentials.json"
+fi
+common_ensure_json_object_file "$HERDR_HOME_DIR/.claude/.credentials.json" "Claude shared credentials"
+
+# Codex. Herdr launches codex without run-codex's CLI flags, so persist the
+# startup update check opt-out in the seeded config instead.
+if [[ ! -e "$HERDR_HOME_DIR/.codex" && -d "$HOME/.codex" ]]; then
+  cp -a "$HOME/.codex" "$HERDR_HOME_DIR/.codex"
+fi
+mkdir -p "$HERDR_HOME_DIR/.codex"
+common_ensure_json_object_file "$HERDR_HOME_DIR/.codex/auth.json" "Codex shared auth"
+touch "$HERDR_HOME_DIR/.codex/config.toml"
+if ! grep -q 'check_for_update_on_startup' "$HERDR_HOME_DIR/.codex/config.toml"; then
+  printf 'check_for_update_on_startup = false\n' >> "$HERDR_HOME_DIR/.codex/config.toml"
+fi
+
+# Pi.
+if [[ ! -e "$HERDR_HOME_DIR/.pi" && -d "$HOME/.pi" ]]; then
+  cp -a "$HOME/.pi" "$HERDR_HOME_DIR/.pi"
+fi
+mkdir -p "$HERDR_HOME_DIR/.pi/agent"
+
+TOOL_MOUNTS=(
+  -v "${HERDR_HOME_DIR}:${USER_HOME}:rw,nosuid,nodev,noexec,z"
+)
+
+HERDR_SKILLS_HOST="$HOME/.claude/skills"
+if [[ -d "$HERDR_SKILLS_HOST" ]]; then
+  common_require_mount_path "$HERDR_SKILLS_HOST" "Claude skills source path"
+  common_require_mount_path "${USER_HOME}/.claude/skills" "Claude skills destination path"
+  TOOL_MOUNTS+=(-v "${HERDR_SKILLS_HOST}:${USER_HOME}/.claude/skills:ro,nosuid,nodev,noexec,z")
+fi
+
+# Optional central env file, shared with run-pi: pi has no login flow, so API
+# keys are its only auth path, and herdr inherits the same need for the pi
+# panes it spawns. Source a user-owned file so keys are available regardless
+# of the calling shell.
+HERDR_ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/aisb/pi.env"
+HERDR_ENV_FILE_LOADED=0
+HERDR_ENV_FILE_VARS=()
+if [[ -L "$HERDR_ENV_FILE" ]]; then
+  echo "Error: refusing symlinked pi env file: $HERDR_ENV_FILE" >&2
+  exit 1
+fi
+if [[ -e "$HERDR_ENV_FILE" ]]; then
+  if [[ ! -f "$HERDR_ENV_FILE" ]]; then
+    echo "Error: pi env file is not a regular file: $HERDR_ENV_FILE" >&2
+    exit 1
+  fi
+  herdr_env_mode="$(stat -c '%a' "$HERDR_ENV_FILE" 2>/dev/null || echo "")"
+  if [[ ! "$herdr_env_mode" =~ ^[0-9]*00$ ]]; then
+    echo "Error: pi env file is group/other accessible: $HERDR_ENV_FILE (mode $herdr_env_mode)" >&2
+    echo "Run: chmod 600 '$HERDR_ENV_FILE'" >&2
+    exit 1
+  fi
+  set -a
+  # shellcheck disable=SC1090
+  source "$HERDR_ENV_FILE"
+  set +a
+  # Collect names assigned at the start of a line (KEY=... or export KEY=...).
+  # This is what gets forwarded — predictable from reading the file.
+  mapfile -t HERDR_ENV_FILE_VARS < <(
+    awk '
+      /^[[:space:]]*#/ { next }
+      match($0, /^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/, m) { print m[2] }
+    ' "$HERDR_ENV_FILE" | awk '!seen[$0]++'
+  )
+  HERDR_ENV_FILE_LOADED=1
+fi
+
+# Forward provider auth for the bundled agents plus optional herdr/pi knobs.
+HERDR_OPTS=()
+HERDR_FORWARDED_VARS=()
+for var in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY TOGETHER_API_KEY PI_TELEMETRY PI_CACHE_RETENTION PI_SKIP_VERSION_CHECK; do
+  if [[ -n "${!var:-}" ]]; then
+    HERDR_OPTS+=(-e "${var}=${!var}")
+    HERDR_FORWARDED_VARS+=("$var")
+  fi
+done
+
+# Also forward anything new that the env file introduced (e.g. provider keys
+# we don't know about yet, or per-provider base-url/model overrides).
+for var in "${HERDR_ENV_FILE_VARS[@]}"; do
+  case " ${HERDR_FORWARDED_VARS[*]} " in *" $var "*) continue ;; esac
+  if [[ -n "${!var:-}" ]]; then
+    HERDR_OPTS+=(-e "${var}=${!var}")
+    HERDR_FORWARDED_VARS+=("$var")
+  fi
+done
+
+# The durable home is writable, so keep herdr/claude XDG state there instead
+# of the ephemeral per-run /tmp default. Claude self-updates are disabled;
+# the image pins versions and rebuilds pick up new releases.
+HERDR_OPTS+=(
+  -e "DISABLE_AUTOUPDATER=1"
+  -e "DISABLE_UPDATES=1"
+  -e "XDG_CONFIG_HOME=${USER_HOME}/.config"
+  -e "XDG_DATA_HOME=${USER_HOME}/.local/share"
+)
+
+if [[ "${AISB_QUIET:-0}" != "1" ]]; then
+  echo "[aisb:herdr] herdr home: $HERDR_HOME_DIR (shared across repos)" >&2
+  echo "[aisb:herdr] bundled agents: claude, codex, pi (native approval prompts; configure herdr agent args to bypass)" >&2
+  if [[ "$HERDR_ENV_FILE_LOADED" == "1" ]]; then
+    echo "[aisb:herdr] env file: $HERDR_ENV_FILE" >&2
+  fi
+  if ((${#HERDR_FORWARDED_VARS[@]})); then
+    echo "[aisb:herdr] env: forwarding ${HERDR_FORWARDED_VARS[*]}" >&2
+  else
+    echo "[aisb:herdr] env: no optional vars forwarded" >&2
+  fi
+  if [[ "${AISB_DEBUG:-0}" == "1" ]]; then
+    echo "[aisb:herdr:debug] herdr home: $HERDR_HOME_DIR -> ${USER_HOME} (rw)" >&2
+    echo "[aisb:herdr:debug] updates: herdr/agent self-updates disabled; use $SCRIPT_DIR/build-containers herdr" >&2
+  fi
+fi
+
+exec podman run "${COMMON_PODMAN_ARGS[@]}" \
+  "${HERDR_OPTS[@]}" "${TOOL_MOUNTS[@]}" \
+  "$IMAGE" "$@"

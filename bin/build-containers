@@ -2,17 +2,17 @@
 set -euo pipefail
 
 # Usage:
-#   build-containers [--no-cache] [base|claude|codex|pi|all]
+#   build-containers [--no-cache] [base|claude|codex|pi|herdr|all]
 #
 # Defaults to `all` when called with no argument. For `all`, the base image is
-# ensured first, then the three flavor images build in parallel by default.
+# ensured first, then the flavor images build in parallel by default.
 # Stale existing base images are refreshed only after an interactive [y/N]
 # prompt. Output from parallel builds is prefixed with [flavor] so lines stay
 # attributable.
 #
 # Env vars:
 #   CLAUDE_NO_CACHE=1       pass --no-cache to podman build
-#   AISB_BUILD_SEQUENTIAL=1 build claude/codex/pi sequentially for `all`
+#   AISB_BUILD_SEQUENTIAL=1 build claude/codex/pi/herdr sequentially for `all`
 #   BASE_IMAGE              override base image tag (default: localhost/aisb-base:latest)
 #   AISB_WORKSPACE          workspace root to inspect for .aisb.env (default: cwd git root)
 #
@@ -22,6 +22,7 @@ set -euo pipefail
 #   claude  -> aisb-claude:latest, or localhost/aisb-claude-<repo-hash>:latest
 #   codex   -> aisb-codex:latest, or localhost/aisb-codex-<repo-hash>:latest
 #   pi      -> aisb-pi:latest, or localhost/aisb-pi-<repo-hash>:latest
+#   herdr   -> aisb-herdr:latest, or localhost/aisb-herdr-<repo-hash>:latest
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]}"
 while [[ -L "$SCRIPT_SOURCE" ]]; do
@@ -38,7 +39,7 @@ source "$SCRIPT_DIR/_repo-config.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  build-containers [--no-cache] [base|claude|codex|pi|all]
+  build-containers [--no-cache] [base|claude|codex|pi|herdr|all]
 
 Options:
   --no-cache   Pass --no-cache to podman build
@@ -97,10 +98,10 @@ while (($#)); do
 done
 
 case "$FLAVOR" in
-  base|claude|codex|pi|all)
+  base|claude|codex|pi|herdr|all)
     ;;
   *)
-    echo "error: unknown flavor '$FLAVOR' (expected: base|claude|codex|pi|all)" >&2
+    echo "error: unknown flavor '$FLAVOR' (expected: base|claude|codex|pi|herdr|all)" >&2
     usage >&2
     exit 2
     ;;
@@ -281,6 +282,45 @@ write_generated_base_containerfile() {
   printf '%s' "$tmp"
 }
 
+# Herdr is a prebuilt binary released through the herdr.dev manifest — the
+# same source `herdr update` and the upstream installer use. Prints
+# "version<TAB>url" for the build host's architecture (podman builds native).
+resolve_herdr_release() {
+  local manifest arch target version url
+  case "$(uname -m)" in
+    x86_64|amd64)   arch="x86_64" ;;
+    aarch64|arm64)  arch="aarch64" ;;
+    *)
+      echo "error: unsupported architecture for herdr: $(uname -m)" >&2
+      return 1
+      ;;
+  esac
+  target="linux-${arch}"
+
+  if ! manifest="$(curl -fsSL --retry 3 --connect-timeout 10 --max-time 20 https://herdr.dev/latest.json)"; then
+    echo "error: could not fetch https://herdr.dev/latest.json (is curl installed and online?)" >&2
+    return 1
+  fi
+
+  version="$(printf '%s\n' "$manifest" | awk -F '"' '/^[[:space:]]*"version"[[:space:]]*:/ { print $4; exit }')"
+  url="$(printf '%s\n' "$manifest" | awk -v target="\"${target}\"" '
+    /^[[:space:]]*"assets"[[:space:]]*:/ { in_assets = 1; next }
+    in_assets && /^[[:space:]]*}/ { exit }
+    in_assets && index($0, target) {
+      sub(/^.*:[[:space:]]*"/, "")
+      sub(/".*$/, "")
+      print
+      exit
+    }
+  ')"
+
+  if [[ -z "$version" || -z "$url" ]]; then
+    echo "error: herdr release manifest does not include a binary for ${target}" >&2
+    return 1
+  fi
+  printf '%s\t%s' "$version" "$url"
+}
+
 resolve_npm_version() {
   local pkg="$1"
   local version
@@ -455,8 +495,37 @@ build_one() {
       echo "Latest pi-coding-agent version: $pi_version"
       flags+=(--build-arg "PI_VERSION=$pi_version")
       ;;
+    herdr)
+      if [[ "$REPO_SCOPED_TOOL_IMAGES" == "1" ]]; then
+        tag="$(aisb_derived_tool_image herdr "$WORKSPACE_HASH")"
+      else
+        tag="aisb-herdr:latest"
+      fi
+      flags+=(--build-arg "BASE_IMAGE=$BASE_IMAGE_TAG")
+      ensure_base_image_exists "$flavor"
+      base_image_id="$(podman image inspect --format '{{.Id}}' "$BASE_IMAGE_TAG")"
+      local herdr_release herdr_version herdr_url
+      herdr_release="$(resolve_herdr_release)"
+      IFS=$'\t' read -r herdr_version herdr_url <<< "$herdr_release"
+      echo "Latest herdr version: $herdr_version"
+      flags+=(
+        --build-arg "HERDR_VERSION=$herdr_version"
+        --build-arg "HERDR_URL=$herdr_url"
+      )
+      # Herdr multiplexes agents, so its image bundles the whole herd.
+      local herd_claude herd_codex herd_pi
+      herd_claude="$(resolve_npm_version @anthropic-ai/claude-code)"
+      herd_codex="$(resolve_npm_version @openai/codex)"
+      herd_pi="$(resolve_npm_version @earendil-works/pi-coding-agent)"
+      echo "Bundled herd versions: claude=$herd_claude codex=$herd_codex pi=$herd_pi"
+      flags+=(
+        --build-arg "CLAUDE_VERSION=$herd_claude"
+        --build-arg "CODEX_VERSION=$herd_codex"
+        --build-arg "PI_VERSION=$herd_pi"
+      )
+      ;;
     *)
-      echo "error: unknown flavor '$flavor' (expected: base|claude|codex|pi|all)" >&2
+      echo "error: unknown flavor '$flavor' (expected: base|claude|codex|pi|herdr|all)" >&2
       return 2
       ;;
   esac
@@ -485,7 +554,7 @@ build_one() {
 
 build_all_sequential() {
   local f
-  for f in claude codex pi; do
+  for f in claude codex pi herdr; do
     build_one "$f"
   done
 }
@@ -495,7 +564,7 @@ build_all_parallel() {
   local -a labels=()
   local f fail i
 
-  for f in claude codex pi; do
+  for f in claude codex pi herdr; do
     (build_one "$f" 2>&1 | sed -u "s/^/[$f] /") &
     pids+=($!)
     labels+=("$f")

@@ -2,9 +2,10 @@
 
 **This repository is in an alpha state. I make no guarantees as to its correctness or utility. I will make breaking changes without notice**
 
-**A**I **s**and**b**ox — run coding agents (Claude Code, Codex, pi, or a plain
-shell) inside a hardened rootless [podman] container. Each invocation gets a
-fresh container; only the current repo and per-agent auth/config are mounted.
+**A**I **s**and**b**ox — run coding agents (Claude Code, Codex, pi, the
+[Herdr] agent multiplexer, or a plain shell) inside a hardened rootless
+[podman] container. Each invocation gets a fresh container; only the current
+repo and per-agent auth/config are mounted.
 
 ## What's here
 
@@ -14,15 +15,17 @@ fresh container; only the current repo and per-agent auth/config are mounted.
 | `Containerfile.claude` | Derived Claude image: base + shared agent toolbox + Claude Code.           |
 | `Containerfile.codex`  | Derived Codex image: base + shared agent toolbox + Node/npm + Codex.       |
 | `Containerfile.pi`     | Derived pi image: base + shared agent toolbox + Node/npm + pi.             |
+| `Containerfile.herdr`  | Derived Herdr image: base + shared agent toolbox + Herdr + the whole herd (Claude Code, Codex, pi). |
 | `bin/build-containers` | Build one or all images. Parallelizes derived image builds by default.     |
 | `bin/run-claude`       | Run Claude Code against the current repo.                                   |
 | `bin/run-codex`        | Run Codex against the current repo.                                         |
 | `bin/run-pi`           | Run pi against the current repo.                                            |
+| `bin/run-herdr`        | Run Herdr (agent multiplexer) against the current repo.                     |
 | `bin/run-sb`           | Generic sandboxed shell / command runner on the base image.                |
 | `bin/_run-common.sh`   | Shared wrapper logic (hardening flags, mounts, guardrails, update checks). |
 | `bin/_repo-config.sh`  | Repo config + image-resolution helpers (`.aisb.env`, repo bases).          |
 | `container/`           | In-image install scripts (Node/npm, uv Python tools, agent runtime deps).  |
-| `install.sh`           | Symlink `claude`/`codex`/`pi`/`sb`/`aisb-build` into `~/.local/bin`.        |
+| `install.sh`           | Symlink `claude`/`codex`/`pi`/`herdr`/`sb`/`aisb-build` into `~/.local/bin`. |
 | `seccomp-strict.json`  | Optional seccomp profile (default + extra denies). Enable via env var.      |
 | `examples/playwright/` | Example repo `Containerfile` layering Playwright on the base.               |
 | `.envrc.example`       | Sample [direnv] hook that pulls API keys via [pass]. Copy to `.envrc`.      |
@@ -52,8 +55,8 @@ Node/npm), then install the agent CLI itself.
 ## Install
 
 ```sh
-./install.sh                # symlinks ~/.local/bin/{claude,codex,pi,sb,aisb-build}
-aisb-build all              # ensure base exists, then build three flavors (parallel)
+./install.sh                # symlinks ~/.local/bin/{claude,codex,pi,herdr,sb,aisb-build}
+aisb-build all              # ensure base exists, then build the flavors (parallel)
 aisb-build --no-cache       # rebuild without the podman layer cache
 AISB_BUILD_SEQUENTIAL=1 aisb-build all
 ```
@@ -70,6 +73,7 @@ From inside any repo:
 claude                          # interactive Claude Code
 codex                           # interactive Codex
 pi                              # interactive pi
+herdr                           # Herdr multiplexer with claude/codex/pi inside
 sb                              # interactive bash in the sandbox
 sb uv run script.py             # one-shot command in the sandbox
 ```
@@ -77,7 +81,7 @@ sb uv run script.py             # one-shot command in the sandbox
 The wrappers:
 
 - **Mount the current repo read-write at its real path.** Agent wrappers
-  (`claude`, `codex`, `pi`) require a git repository by default; `sb` may use a
+  (`claude`, `codex`, `pi`, `herdr`) require a git repository by default; `sb` may use a
   narrow non-git `$PWD`. All wrappers refuse broad roots such as `/` and
   `$HOME`. Set `AISB_WORKSPACE_READONLY=1` for audit/review/exploration runs
   where the agent should not mutate the repo.
@@ -87,6 +91,10 @@ The wrappers:
   - `pi` → `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`,
     `OPENROUTER_API_KEY`, `TOGETHER_API_KEY`, plus any vars named in its env
     file (see below) and `PI_*` tuning vars
+  - `herdr` → `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`,
+    `GOOGLE_API_KEY`, `OPENROUTER_API_KEY`, `TOGETHER_API_KEY`, plus any vars
+    named in pi's env file (see below) and `PI_*` tuning vars — the union of
+    what its bundled agents understand
   - `sb` → `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`,
     `OPENROUTER_API_KEY`, `TOGETHER_API_KEY`, `GROQ_API_KEY`, `HF_TOKEN`,
     `QWEN_MODEL`
@@ -96,7 +104,7 @@ The wrappers:
   host `git config user.name`/`user.email` as `GIT_AUTHOR_*`/`GIT_COMMITTER_*`
   so commits made in the container carry your identity.
 - **Persist each agent's home read-write, shared across every repo.** Claude,
-  Codex, and pi each get one durable home directory (seeded from your host
+  Codex, pi, and Herdr each get one durable home directory (seeded from your host
   dotfiles on first use, then owned by AISB) mounted rw so login, token refresh,
   MCP changes, skills, and atomic config writes persist — a single login carries
   across all repos. On SELinux hosts, wrappers ask before relabeling the
@@ -114,7 +122,7 @@ The wrappers:
   wrapper-managed uv environment (`/aisb-<tool>/venv` for agents, `/venv` for
   `sb`) instead. Symlinked or non-directory `.venv` paths fail closed.
 - **Run tools with container-local homes** (`/home/aisb-claude`,
-  `/home/aisb-codex`, `/home/aisb-pi`, `/home/sb`). Startup logs show the host
+  `/home/aisb-codex`, `/home/aisb-pi`, `/home/aisb-herdr`, `/home/sb`). Startup logs show the host
   path and container destination for each auth/config mount.
 - **Mount a per-invocation `/tmp`** from `$XDG_STATE_HOME/claude-podman/` so
   scratch data stays outside the repo without being capped by a small tmpfs.
@@ -126,7 +134,8 @@ The wrappers:
   the shared Codex auth file is empty, `run-codex` stops with instructions
   (except for `login`/`help`/`--version`-style commands).
 - **Disable the agents' own self-update paths.** AISB-managed images are the
-  update boundary: wrappers check npm for newer agent versions at most once per
+  update boundary: wrappers check upstream for newer agent versions (npm, or
+  the herdr.dev release manifest for `herdr`) at most once per
   hour and, in interactive runs, prompt to rebuild the managed image before
   continuing. Declining continues with the current image and snoozes the check
   for the rest of the TTL window. Non-interactive runs just print the exact
@@ -289,11 +298,12 @@ Per-wrapper and per-run overrides:
 | `CLAUDE_IMAGE`             | Override image tag for `run-claude`.                                  |
 | `CODEX_IMAGE`              | Override image tag for `run-codex`.                                  |
 | `PI_IMAGE`                 | Override image tag for `run-pi`.                                     |
+| `HERDR_IMAGE`              | Override image tag for `run-herdr`.                                  |
 | `SB_IMAGE`                 | Override image tag for `run-sb`.                                     |
 | `CLAUDE_SAFE_MODE=1`       | Keep Claude's built-in permission prompts.                          |
 | `CODEX_SAFE_MODE=1`        | Keep Codex's built-in approvals + sandbox.                          |
 | `CLAUDE_NO_CACHE=1`        | Pass `--no-cache` to `podman build` (or use `aisb-build --no-cache`). |
-| `AISB_BUILD_SEQUENTIAL=1`  | Build `claude`, `codex`, and `pi` sequentially for `aisb-build all`; useful for debugging constrained repo bases. |
+| `AISB_BUILD_SEQUENTIAL=1`  | Build `claude`, `codex`, `pi`, and `herdr` sequentially for `aisb-build all`; useful for debugging constrained repo bases. |
 | `BASE_IMAGE`               | Override base image tag at build time.                              |
 | `AISB_AUTH_WRITE=1`        | Auth-oriented run: mount the repo read-only by default (per-tool `CODEX_AUTH_WRITE`/`PI_AUTH_WRITE` also work). |
 | `AISB_AUTH_WRITE_KEEP_REPO_RW=1` | In auth-write mode, keep the repo writable.                    |
@@ -325,6 +335,25 @@ For a first-time Codex OAuth login, run:
 ```sh
 codex login --device-auth
 ```
+
+### Herdr notes
+
+- The `herdr` flavor bundles Claude Code, Codex, and pi inside one image so
+  Herdr has agents to multiplex; all four versions are pinned at image build
+  time, and the wrapper's update check follows the Herdr binary via the
+  herdr.dev release manifest.
+- Herdr's durable home is separate from the per-tool homes used by
+  `claude`/`codex`/`pi`. It is seeded from your host dotfiles on first use, so
+  logins performed in the standalone wrappers after that do not automatically
+  appear inside Herdr — log in once inside a Herdr pane, or rely on forwarded
+  API keys.
+- Agents launched inside Herdr run with their native approval prompts; the
+  container is still the sandbox, but the standalone wrappers' bypass flags
+  (`--dangerously-skip-permissions` etc.) are not injected. Configure Herdr's
+  agent arguments if you want them.
+- The Herdr server runs inside the per-run container: detach/reattach works
+  while the container is alive, but panes and sessions end when the container
+  exits. Session metadata in the durable home survives.
 
 ### Repo-specific base images
 
@@ -417,8 +446,8 @@ allowed. Recognized keys:
 When a repo-specific base image is active:
 
 - `sb` runs that image directly unless `SB_IMAGE` is set.
-- `claude`, `codex`, and `pi` use repo-scoped derived images built from that
-  base, such as `localhost/aisb-codex-<repo-hash>:latest`, unless their
+- `claude`, `codex`, `pi`, and `herdr` use repo-scoped derived images built from
+  that base, such as `localhost/aisb-codex-<repo-hash>:latest`, unless their
   per-wrapper image override is set.
 - `bin/build-containers` builds `./Containerfile` into the generated base tag
   when that file is the source of the repo base image. For manually configured
@@ -433,8 +462,9 @@ When a repo-specific base image is active:
   for `FROM`.
 
 Derived tool images install a shared agent toolbox on top of the repo base,
-without changing the repo base image itself. The `codex` and `pi` images also
-install Node.js/npm in their own image before installing their CLI packages.
+without changing the repo base image itself. The `codex`, `pi`, and `herdr`
+images also install Node.js/npm in their own image before installing their CLI
+packages.
 The shared toolbox includes `prek`, installed to `/usr/local/bin` so it remains
 available independently of wrapper-managed uv tool directories. This requires
 the repo base to have one supported package manager: `microdnf`, `dnf`,
@@ -446,9 +476,9 @@ Build smoke-test checklist for repo-derived images:
 - Fedora or Fedora-minimal repo base using `microdnf`
 - Debian or Ubuntu repo base using `apt-get`
 - Alpine repo base using `apk`
-- unsupported repo base with no package manager; `claude`, `codex`, and `pi`
-  builds should fail with the supported package-manager message, while `sb` can
-  still run the repo image directly
+- unsupported repo base with no package manager; `claude`, `codex`, `pi`, and
+  `herdr` builds should fail with the supported package-manager message, while
+  `sb` can still run the repo image directly
 
 Build repo-specific tool images from inside the project repo, or point the build
 script at the project explicitly:
@@ -458,8 +488,8 @@ AISB_WORKSPACE=/path/to/project aisb-build all
 ```
 
 Explicit environment overrides keep precedence: `SB_IMAGE`, `CLAUDE_IMAGE`,
-`CODEX_IMAGE`, and `PI_IMAGE` override wrapper selection; `BASE_IMAGE` overrides
-the base image used by `bin/build-containers`.
+`CODEX_IMAGE`, `PI_IMAGE`, and `HERDR_IMAGE` override wrapper selection;
+`BASE_IMAGE` overrides the base image used by `bin/build-containers`.
 
 For AISB-managed images, the wrappers compare the current build recipe against
 image metadata from the last build. In interactive runs, if the image looks
@@ -469,5 +499,6 @@ it before continuing. In non-interactive runs, it warns and keeps going.
 [podman]: https://podman.io
 [direnv]: https://direnv.net
 [pass]: https://www.passwordstore.org
+[Herdr]: https://herdr.dev
 </content>
 </invoke>
