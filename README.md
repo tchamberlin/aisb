@@ -166,6 +166,34 @@ The wrappers:
   it at e.g. `http://myrepo.localhost:3000` without editing `/etc/hosts`. Port
   publishing is a `podman run` option, so it cannot be added to an
   already-running container.
+- **Optionally bridge the host clipboard** with `AISB_CLIPBOARD=1`. By default
+  the container has no clipboard channel: TUIs "copy" into an app-internal
+  buffer that never reaches the host, and image paste fails because the agent
+  cannot read the host clipboard (plain text paste works — it is just terminal
+  input). The bridge spawns a small host-side helper for the session that
+  serves copy/paste over FIFOs under the per-run `/tmp` mount (FIFOs rather
+  than a unix socket so SELinux-confined containers can use it), and puts
+  `wl-copy`/`wl-paste`/`xclip` shims on the container `PATH`. Tools that shell
+  out for clipboard access — Claude Code image paste (Ctrl+V), TUI copy —
+  then work in both directions, for text and images, without the container ever
+  seeing the compositor socket:
+
+  ```sh
+  AISB_CLIPBOARD=1 herdr
+  ```
+
+  This intentionally grants the agent read/write access to the host clipboard
+  (see Hardening), so it is opt-in per run and only via the environment —
+  `.aisb.env` cannot enable it. Both the clipboard and the middle-click
+  primary selection are bridged (middle-click *paste into* container apps
+  works even without the bridge — the terminal injects it as input; the
+  bridge covers apps that set or read the primary selection themselves). Only
+  `text/*` and `image/*` clipboard types are bridged, transfers are capped at
+  32 MiB, and the helper exits with the session. Requires `wl-clipboard` (Wayland) or `xclip` (X11) on the host.
+  Tools that speak the Wayland/X11 clipboard protocol natively instead of
+  shelling out are not covered. The helper logs to
+  `.aisb-clipboard/helper.log` under the per-run tmp dir (path shown with
+  `AISB_DEBUG=1`); per-request logging with `AISB_DEBUG=1`.
 - **Ask before marking a repo container-readable** the first time an agent
   wrapper runs there on SELinux hosts. Approval is remembered per repo under
   AISB state and future runs mount the workspace with Podman's `:z` relabel
@@ -254,6 +282,14 @@ sandbox with sensitive material:
   host-to-container access for new runs. Prefer loopback bindings such as
   `127.0.0.1:5173:5173`; binding to `0.0.0.0` can expose the service to other
   machines that can reach the host.
+- **The clipboard bridge is opt-in clipboard exposure.** With `AISB_CLIPBOARD=1`
+  the agent can read whatever you copy — or, via the primary selection, merely
+  *select* — on the host while the session runs (passwords, tokens) and can
+  replace clipboard contents you later paste into a host shell (clipboard
+  poisoning). The bridge never exposes the compositor
+  socket — only a text/image copy/paste protocol — but treat those two risks as
+  the price of image paste. Leave it off for sessions touching untrusted repo
+  content.
 - **The mounted repo is read-write.** An agent can modify files, commit, and (if
   `GH_TOKEN` is present) push malicious commits upstream.
   `AISB_WORKSPACE_READONLY=1` makes the repo mount read-only for review-style
@@ -326,6 +362,8 @@ Per-wrapper and per-run overrides:
 | `AISB_NO_NETWORK=1`        | `run-sb` only: disable all networking (`--network=none`).           |
 | `AISB_STRICT_SECCOMP=1`    | Apply `seccomp-strict.json` (extra denies on top of podman default). |
 | `AISB_SECCOMP_PROFILE`     | Path to custom seccomp profile (overrides `seccomp-strict.json`).    |
+| `AISB_CLIPBOARD=1`         | Bridge the host clipboard into the container (text + images, both directions) via a per-session helper and `wl-copy`/`wl-paste`/`xclip` shims. Grants the agent host-clipboard read/write; environment-only (ignored in `.aisb.env`). Off by default. |
+| `AISB_CLIPBOARD_BACKEND`   | Force the helper's host backend: `wayland`, `x11`, or `test` (auto-detected by default). |
 | `AISB_GPU=1`               | Pass the host GPU through: `--device /dev/dri --group-add keep-groups`. Lets Chromium/Mesa use the iGPU for hardware WebGL (else llvmpipe/SwiftShader). Host user must be in the `render` group. Off by default. |
 | `AISB_GPU_DEVICE`          | DRM device to expose when `AISB_GPU=1` (default `/dev/dri`).         |
 | `AISB_GPU_DISABLE_LABEL=1` | With `AISB_GPU=1`, also add `--security-opt label=disable` for SELinux-enforcing hosts that block device access. Last resort — prefer `sudo setsebool -P container_use_devices 1`, which permits device access while keeping the container SELinux-confined. |

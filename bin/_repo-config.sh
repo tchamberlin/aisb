@@ -209,6 +209,12 @@ aisb_load_repo_env() {
         # shellcheck disable=SC2034 # Consumed by scripts that source this helper.
         AISB_REPO_ALLOW_NON_GIT_WORKSPACE="$value"
         ;;
+      AISB_CLIPBOARD)
+        # Deliberately environment-only: the repo is agent-writable, so a
+        # .aisb.env key would let an agent enable the clipboard bridge for
+        # the user's next run.
+        echo "warn: ignoring AISB_CLIPBOARD in $env_file (clipboard bridge is opt-in via the environment only)" >&2
+        ;;
       *)
         echo "warn: ignoring unsupported $env_file key '$key'" >&2
         ;;

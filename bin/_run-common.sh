@@ -37,6 +37,9 @@ common_log_startup() {
   if (( ${#COMMON_PUBLISH_PORT_LINES[@]} > 0 )); then
     echo "[aisb:${TOOL}] published ports: ${COMMON_PUBLISH_PORT_LINES[*]}" >&2
   fi
+  if [[ -n "${COMMON_CLIPBOARD_SUMMARY:-}" ]]; then
+    echo "[aisb:${TOOL}] clipboard: ${COMMON_CLIPBOARD_SUMMARY} — agent can read/write the host clipboard" >&2
+  fi
   if (( ${#COMMON_EXTRA_MOUNT_LINES[@]} > 0 )); then
     echo "[aisb:${TOOL}] extra mounts: ${#COMMON_EXTRA_MOUNT_LINES[@]} from ${AISB_REPO_ENV_FILE}" >&2
     local _extra_mount_line
@@ -80,6 +83,10 @@ common_log_startup() {
 
   echo "[aisb:${TOOL}:debug] seccomp: ${COMMON_SECCOMP_SUMMARY:-podman default}" >&2
   echo "[aisb:${TOOL}:debug] gpu: ${COMMON_GPU_SUMMARY:-disabled (set AISB_GPU=1)}" >&2
+  echo "[aisb:${TOOL}:debug] clipboard: ${COMMON_CLIPBOARD_SUMMARY:-disabled (set AISB_CLIPBOARD=1)}" >&2
+  if [[ -n "${COMMON_CLIPBOARD_LOG:-}" ]]; then
+    echo "[aisb:${TOOL}:debug] clipboard helper log: $COMMON_CLIPBOARD_LOG" >&2
+  fi
 
   if [[ -n "${GH_TOKEN:-}" ]]; then
     echo "[aisb:${TOOL}:debug] gh auth: GH_TOKEN env" >&2
@@ -337,6 +344,13 @@ common_init() {
   host_git_name="$(git config --get user.name 2>/dev/null || true)"
   host_git_email="$(git config --get user.email 2>/dev/null || true)"
 
+  # Clipboard shims go first on PATH when the bridge is enabled; the images
+  # ship no wl-copy/wl-paste/xclip, so this only ever resolves to the shims.
+  local _clipboard_path_prefix=""
+  if [[ "${AISB_CLIPBOARD:-0}" == "1" ]]; then
+    _clipboard_path_prefix="/opt/aisb/clipboard:"
+  fi
+
   COMMON_PODMAN_ARGS=(
     --rm
     --pull=never
@@ -353,7 +367,7 @@ common_init() {
     --label "io.${TOOL}.repo_hash=$HASH"
     --label "io.${TOOL}.session=$STAMP-$$"
     -e "HOME=${USER_HOME}"
-    -e "PATH=${USER_HOME}/.local/bin:/uv-bin:/usr/local/bin:/usr/bin:/bin"
+    -e "PATH=${_clipboard_path_prefix}${USER_HOME}/.local/bin:/uv-bin:/usr/local/bin:/usr/bin:/bin"
     -e "TERM=${TERM:-xterm-256color}"
     -e "COLORTERM=${COLORTERM:-truecolor}"
     -e "GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-$host_git_name}"
@@ -416,6 +430,7 @@ common_init() {
   _common_append_extra_mounts
   _common_append_publish_ports
   _common_append_gpu
+  _common_append_clipboard
   _common_append_seccomp
   common_log_startup
 }
@@ -1236,6 +1251,7 @@ _common_append_extra_mounts() {
     "/uv-tools"
     "/uv-bin"
     "/tmp"
+    "/opt/aisb"
   )
 
   local entry resolved src dst opts
@@ -1283,6 +1299,68 @@ _common_append_gpu() {
     COMMON_PODMAN_ARGS+=(--security-opt label=disable)
     COMMON_GPU_SUMMARY="$COMMON_GPU_SUMMARY, label=disable"
   fi
+}
+
+# Opt-in host clipboard bridge (AISB_CLIPBOARD=1). Spawns bin/aisb-clipboard-
+# helper on the host serving a narrow copy/paste protocol over FIFOs in a
+# directory under the per-run /tmp mount, and puts wl-copy/wl-paste/xclip
+# shims on the container PATH so tools that shell out for clipboard access
+# (Claude Code image paste, TUI copy) reach the host clipboard — text and
+# images, both directions — without ever seeing the compositor socket.
+# FIFOs rather than a unix socket because SELinux checks socket connects
+# against the listener's process domain (container_t may not connectto an
+# unconfined host listener), while FIFO i/o is a plain file-class check the
+# :z-relabeled /tmp mount already permits.
+#
+# Security note: this hands the agent read/write access to the host
+# clipboard. Anything you copy on the host during a session becomes readable
+# (secrets, tokens), and the agent can replace clipboard contents you later
+# paste into a host shell. Strictly opt-in per run, and deliberately NOT
+# honored from .aisb.env: the repo is agent-writable, so a repo key would let
+# an agent grant itself clipboard access for your next run.
+#
+# The helper watches the wrapper PID (which `exec podman run` turns into the
+# podman PID) and exits when the session does; no cleanup handling needed.
+# Tools that speak the Wayland/X11 clipboard protocol natively (rather than
+# shelling out) are not covered — that would require mounting the real
+# compositor socket, which this bridge exists to avoid.
+_common_append_clipboard() {
+  COMMON_CLIPBOARD_SUMMARY=""
+  COMMON_CLIPBOARD_LOG=""
+  [[ "${AISB_CLIPBOARD:-0}" == "1" ]] || return 0
+
+  local aisb_root shims_dir helper bridge_dir
+  aisb_root="$(dirname "$_AISB_COMMON_DIR")"
+  shims_dir="$aisb_root/container/clipboard"
+  helper="$_AISB_COMMON_DIR/aisb-clipboard-helper"
+
+  if [[ ! -x "$helper" || ! -d "$shims_dir" ]]; then
+    echo "warn: AISB_CLIPBOARD=1 but bridge files are missing ($helper, $shims_dir); clipboard disabled" >&2
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "warn: AISB_CLIPBOARD=1 requires python3 on the host; clipboard disabled" >&2
+    return 0
+  fi
+
+  common_require_mount_path "$shims_dir" "clipboard shims source path"
+
+  bridge_dir="$WORKSPACE_TMP_DIR/.aisb-clipboard"
+  mkdir -p "$bridge_dir"
+  COMMON_CLIPBOARD_LOG="$bridge_dir/helper.log"
+
+  "$helper" --dir "$bridge_dir" --parent-pid $$ \
+    >>"$COMMON_CLIPBOARD_LOG" 2>&1 &
+  COMMON_CLIPBOARD_HELPER_PID=$!
+
+  COMMON_PODMAN_ARGS+=(
+    -v "${shims_dir}:/opt/aisb/clipboard:ro,nosuid,nodev,z"
+    -e "AISB_CLIPBOARD_DIR=/tmp/.aisb-clipboard"
+    # Dummy value so agents choose their wl-clipboard code path (and thus the
+    # shims); there is no compositor socket behind it.
+    -e "WAYLAND_DISPLAY=wayland-aisb-bridge"
+  )
+  COMMON_CLIPBOARD_SUMMARY="host clipboard bridged (helper pid $COMMON_CLIPBOARD_HELPER_PID)"
 }
 
 _common_append_seccomp() {
