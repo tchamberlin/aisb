@@ -354,6 +354,14 @@ common_init() {
   COMMON_PODMAN_ARGS=(
     --rm
     --pull=never
+    # PID 1 must reap orphans: Chromium's process tree reparents children to
+    # PID 1 on messy deaths, and without an init they accumulate as zombies
+    # until --pids-limit is exhausted and the container can't spawn anything
+    # (observed: 649 zombies after ~14h of repeated browser launches). --init
+    # injects podman's catatonit as PID 1 ahead of any image ENTRYPOINT, so it
+    # also covers the claude/codex images whose entrypoints replace the base
+    # image's tini.
+    --init
     --name "$NAME"
     --userns=keep-id
     --passwd-entry "${USER_NAME}:x:\$UID:\$GID:${USER_NAME}:${USER_HOME}:/bin/bash"
