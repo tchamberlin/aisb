@@ -215,6 +215,12 @@ aisb_load_repo_env() {
         # the user's next run.
         echo "warn: ignoring AISB_CLIPBOARD in $env_file (clipboard bridge is opt-in via the environment only)" >&2
         ;;
+      AISB_STARTUP)
+        # Environment-only for the same reason, and more so: this one runs a
+        # command. A .aisb.env key would let an agent choose what executes at
+        # the start of the user's next session.
+        echo "warn: ignoring AISB_STARTUP in $env_file (startup command is opt-in via the environment only)" >&2
+        ;;
       *)
         echo "warn: ignoring unsupported $env_file key '$key'" >&2
         ;;
@@ -233,6 +239,13 @@ aisb_load_repo_env() {
       echo "warn: ignoring AISB_NPM_PACKAGES/AISB_PYTHON_TOOLS in $env_file because AISB_BASE_IMAGE is set" >&2
       AISB_REPO_NPM_PACKAGES=()
       AISB_REPO_PYTHON_TOOLS=()
+    fi
+    # Same for a repo Containerfile: the pin wins, and the Containerfile is
+    # never built or read. Say so -- silently ignoring it means edits to it
+    # appear to do nothing, with no clue in the build log as to why.
+    if [[ -n "$AISB_REPO_CONTAINERFILE" ]]; then
+      echo "warn: $AISB_REPO_CONTAINERFILE is not being used because AISB_BASE_IMAGE is set in $env_file" >&2
+      echo "      remove AISB_BASE_IMAGE to build the base from that Containerfile instead" >&2
     fi
   elif [[ -n "$AISB_REPO_CONTAINERFILE" ]]; then
     AISB_REPO_BASE_IMAGE="$AISB_REPO_AUTO_BASE_IMAGE"

@@ -201,5 +201,32 @@ if [[ "${AISB_QUIET:-0}" != "1" ]]; then
   fi
 fi
 
+# Optional startup command, run inside the container before the agent starts.
+# For repos whose base image ships services the agent needs -- a database, a
+# broker, rpcbind -- which cannot start themselves: aisb replaces the image's
+# ENTRYPOINT, so anything it would have launched never runs.
+#
+# Environment-only, like AISB_CLIPBOARD, and for a stronger reason: this
+# executes a command, so honoring it from the agent-writable .aisb.env would
+# let an agent choose what runs at the start of the user's next session.
+#
+#   AISB_STARTUP='mc_container/start-services' run-claude
+#
+# A non-zero exit fails the run rather than dropping you into an agent that
+# thinks its database is up.
+if [[ -n "${AISB_STARTUP:-}" ]]; then
+  [[ "${AISB_QUIET:-0}" == "1" ]] || echo "[aisb:claude] startup command: $AISB_STARTUP" >&2
+  CLAUDE_OPTS+=(-e "AISB_STARTUP=$AISB_STARTUP")
+  exec podman run "${COMMON_PODMAN_ARGS[@]}" "${CLAUDE_OPTS[@]}" "${TOOL_MOUNTS[@]}" \
+    --entrypoint /bin/bash \
+    "$IMAGE" -c '
+      if ! eval "$AISB_STARTUP" >&2; then
+        echo "aisb: startup command failed: $AISB_STARTUP" >&2
+        exit 1
+      fi
+      exec /opt/claude/bin/claude-entrypoint "$@"
+    ' aisb-startup "${CLAUDE_FLAGS[@]}" "$@"
+fi
+
 exec podman run "${COMMON_PODMAN_ARGS[@]}" "${CLAUDE_OPTS[@]}" "${TOOL_MOUNTS[@]}" \
   "$IMAGE" "${CLAUDE_FLAGS[@]}" "$@"

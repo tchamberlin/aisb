@@ -348,6 +348,7 @@ Per-wrapper and per-run overrides:
 | `AISB_ALLOW_DANGEROUS_RELABEL=1` | With `AISB_RELABEL_WORKSPACE=1`, allow SELinux relabeling of a dangerous root. |
 | `AISB_WORKSPACE_READONLY=1` | Mount the workspace `ro,nosuid,nodev` for audit/review/exploration runs. |
 | `GH_TOKEN`                  | Forward this token for GitHub CLI auth. Host `gh` OAuth state and `GITHUB_TOKEN` are not forwarded. |
+| `AISB_STARTUP='<cmd>'`     | Run a command inside the container before the agent starts, for base images that ship services (a database, a broker, `rpcbind`) which cannot start themselves because aisb replaces the image `ENTRYPOINT`. Runs as the agent user, in the workspace; a non-zero exit aborts the run. Environment-only, like `AISB_CLIPBOARD` and for a stronger reason: it executes a command, so honoring it from the agent-writable `.aisb.env` would let an agent choose what runs at the start of the next session. |
 | `AISB_DEBUG=1`             | Include detailed mount/auth/hardening diagnostics in startup logs.  |
 | `AISB_QUIET=1`             | Suppress wrapper startup summary logs.                             |
 | `AISB_UPDATE_CHECK=0`      | Disable AISB-managed agent version checks on wrapper startup.       |
