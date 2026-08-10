@@ -6,12 +6,10 @@ ENV NPM_CONFIG_CACHE=/tmp/npm-cache \
     NPM_CONFIG_UPDATE_NOTIFIER=false
 
 COPY --chmod=0755 container/install-agent-runtime-deps.sh /usr/local/bin/aisb-install-agent-runtime-deps
-COPY --chmod=0755 container/install-agent-python-tools.sh /usr/local/bin/aisb-install-agent-python-tools
 COPY --chmod=0755 container/install-node-npm.sh /usr/local/bin/aisb-install-node-npm
 RUN /usr/local/bin/aisb-install-agent-runtime-deps \
- && /usr/local/bin/aisb-install-agent-python-tools ruff ty prek \
  && /usr/local/bin/aisb-install-node-npm \
- && rm /usr/local/bin/aisb-install-agent-runtime-deps /usr/local/bin/aisb-install-agent-python-tools /usr/local/bin/aisb-install-node-npm
+ && rm /usr/local/bin/aisb-install-agent-runtime-deps /usr/local/bin/aisb-install-node-npm
 
 ARG PI_VERSION=unknown
 LABEL io.aisb.tool=pi \
@@ -21,5 +19,20 @@ RUN echo "pi-coding-agent version: ${PI_VERSION}" \
  && test "${PI_VERSION}" != "unknown" \
  && npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}" \
  && rm -rf "${NPM_CONFIG_CACHE:-/root/.npm}" /tmp/npm-cache
+
+# Keep frequently released Python tools after the agent install so changing
+# their exact versions invalidates only this final filesystem layer.
+ARG RUFF_VERSION=unknown
+ARG TY_VERSION=unknown
+ARG PREK_VERSION=unknown
+COPY --chmod=0755 container/install-agent-python-tools.sh /usr/local/bin/aisb-install-agent-python-tools
+RUN test "${RUFF_VERSION}" != "unknown" \
+ && test "${TY_VERSION}" != "unknown" \
+ && test "${PREK_VERSION}" != "unknown" \
+ && /usr/local/bin/aisb-install-agent-python-tools "ruff==${RUFF_VERSION}" "ty==${TY_VERSION}" "prek==${PREK_VERSION}" \
+ && rm /usr/local/bin/aisb-install-agent-python-tools
+LABEL io.aisb.python-tool.ruff.version="${RUFF_VERSION}" \
+      io.aisb.python-tool.ty.version="${TY_VERSION}" \
+      io.aisb.python-tool.prek.version="${PREK_VERSION}"
 
 ENTRYPOINT ["pi"]

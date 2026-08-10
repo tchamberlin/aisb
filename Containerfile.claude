@@ -2,10 +2,8 @@ ARG BASE_IMAGE=localhost/aisb-base:latest
 FROM ${BASE_IMAGE}
 
 COPY --chmod=0755 container/install-agent-runtime-deps.sh /usr/local/bin/aisb-install-agent-runtime-deps
-COPY --chmod=0755 container/install-agent-python-tools.sh /usr/local/bin/aisb-install-agent-python-tools
 RUN /usr/local/bin/aisb-install-agent-runtime-deps \
- && /usr/local/bin/aisb-install-agent-python-tools ruff ty prek \
- && rm /usr/local/bin/aisb-install-agent-runtime-deps /usr/local/bin/aisb-install-agent-python-tools
+ && rm /usr/local/bin/aisb-install-agent-runtime-deps
 
 ARG CLAUDE_VERSION=unknown
 LABEL io.aisb.tool=claude \
@@ -41,5 +39,20 @@ RUN printf '%s\n' \
       'exec /opt/claude/bin/claude "$@"' \
     > /opt/claude/bin/claude-entrypoint \
  && chmod 0755 /opt/claude/bin/claude-entrypoint
+
+# Keep frequently released Python tools after the agent install so changing
+# their exact versions invalidates only this final filesystem layer.
+ARG RUFF_VERSION=unknown
+ARG TY_VERSION=unknown
+ARG PREK_VERSION=unknown
+COPY --chmod=0755 container/install-agent-python-tools.sh /usr/local/bin/aisb-install-agent-python-tools
+RUN test "${RUFF_VERSION}" != "unknown" \
+ && test "${TY_VERSION}" != "unknown" \
+ && test "${PREK_VERSION}" != "unknown" \
+ && /usr/local/bin/aisb-install-agent-python-tools "ruff==${RUFF_VERSION}" "ty==${TY_VERSION}" "prek==${PREK_VERSION}" \
+ && rm /usr/local/bin/aisb-install-agent-python-tools
+LABEL io.aisb.python-tool.ruff.version="${RUFF_VERSION}" \
+      io.aisb.python-tool.ty.version="${TY_VERSION}" \
+      io.aisb.python-tool.prek.version="${PREK_VERSION}"
 
 ENTRYPOINT ["/opt/claude/bin/claude-entrypoint"]

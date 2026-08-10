@@ -220,10 +220,12 @@ ensure_default_base() {
   local tag="localhost/aisb-base:latest"
   local expected actual
   expected="$(aisb_default_base_recipe_fingerprint "$REPO_ROOT")"
+  resolve_python_tool_versions
 
   if podman image exists "$tag"; then
     actual="$(image_label "$tag" "io.aisb.recipe_fingerprint")"
-    if [[ -n "$actual" && "$actual" == "$expected" ]]; then
+    if [[ -n "$actual" && "$actual" == "$expected" ]] \
+      && image_has_current_python_tools "$tag"; then
       return 0
     fi
     echo "Default base image '$tag' is stale; rebuilding it first."
@@ -232,6 +234,7 @@ ensure_default_base() {
   fi
 
   local -a flags=("${COMMON_FLAGS[@]}")
+  append_python_tool_build_args flags
   flags+=(
     --label "io.aisb.managed=true"
     --label "io.aisb.flavor=base"
@@ -331,10 +334,75 @@ resolve_npm_version() {
   printf '%s' "$version"
 }
 
+resolve_pypi_version() {
+  local pkg="$1"
+  local version
+  if ! version="$({
+    curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
+      "https://pypi.org/pypi/${pkg}/json"
+  } | node -e '
+    let body = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", chunk => { body += chunk; });
+    process.stdin.on("end", () => {
+      try {
+        const version = JSON.parse(body)?.info?.version;
+        if (typeof version !== "string" || version.length === 0) process.exit(1);
+        process.stdout.write(version);
+      } catch {
+        process.exit(1);
+      }
+    });
+  ')" || [[ -z "$version" ]]; then
+    echo "error: could not resolve PyPI version for $pkg (are curl and node installed and online?)" >&2
+    return 1
+  fi
+  if [[ ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
+    echo "error: PyPI returned an unsafe version for $pkg: $version" >&2
+    return 1
+  fi
+  printf '%s' "$version"
+}
+
+PYTHON_TOOL_VERSIONS_RESOLVED=0
+RUFF_VERSION=""
+TY_VERSION=""
+PREK_VERSION=""
+
+resolve_python_tool_versions() {
+  if [[ "$PYTHON_TOOL_VERSIONS_RESOLVED" == "1" ]]; then
+    return 0
+  fi
+
+  RUFF_VERSION="$(resolve_pypi_version ruff)"
+  TY_VERSION="$(resolve_pypi_version ty)"
+  PREK_VERSION="$(resolve_pypi_version prek)"
+  PYTHON_TOOL_VERSIONS_RESOLVED=1
+  echo "Latest Python tool versions: ruff=$RUFF_VERSION ty=$TY_VERSION prek=$PREK_VERSION"
+}
+
+append_python_tool_build_args() {
+  local -n build_flags="$1"
+  resolve_python_tool_versions
+  build_flags+=(
+    --build-arg "RUFF_VERSION=$RUFF_VERSION"
+    --build-arg "TY_VERSION=$TY_VERSION"
+    --build-arg "PREK_VERSION=$PREK_VERSION"
+  )
+}
+
 image_label() {
   local image="$1"
   local label="$2"
   podman image inspect --format "{{if .Config.Labels}}{{index .Config.Labels \"$label\"}}{{end}}" "$image" 2>/dev/null || true
+}
+
+image_has_current_python_tools() {
+  local image="$1"
+  resolve_python_tool_versions
+  [[ "$(image_label "$image" "io.aisb.python-tool.ruff.version")" == "$RUFF_VERSION" ]] \
+    && [[ "$(image_label "$image" "io.aisb.python-tool.ty.version")" == "$TY_VERSION" ]] \
+    && [[ "$(image_label "$image" "io.aisb.python-tool.prek.version")" == "$PREK_VERSION" ]]
 }
 
 managed_base_image_is_stale() {
@@ -351,7 +419,17 @@ managed_base_image_is_stale() {
   actual_recipe="$(image_label "$BASE_IMAGE_TAG" "io.aisb.recipe_fingerprint")"
   expected_recipe="$(aisb_expected_recipe_fingerprint "$REPO_ROOT" "$WORKSPACE_ROOT" base)"
 
-  [[ -z "$actual_recipe" || "$actual_recipe" != "$expected_recipe" ]]
+  if [[ -z "$actual_recipe" || "$actual_recipe" != "$expected_recipe" ]]; then
+    return 0
+  fi
+
+  # A project-authored Containerfile owns its own package policy. Managed
+  # default/generated bases, however, should refresh when bundled tools move.
+  if repo_base_is_local_containerfile; then
+    return 1
+  fi
+
+  ! image_has_current_python_tools "$BASE_IMAGE_TAG"
 }
 
 BASE_STALE_REFRESH_ASKED=0
@@ -430,6 +508,10 @@ build_one() {
   local tag recipe_fingerprint base_image_id build_flavor
 
   build_flavor="$flavor"
+
+  if [[ "$flavor" != "base" || "$containerfile" == "$REPO_ROOT/Containerfile.base" ]]; then
+    append_python_tool_build_args flags
+  fi
 
   case "$flavor" in
     base)
@@ -586,6 +668,9 @@ build_all_parallel() {
 
 case "$FLAVOR" in
   all)
+    # Resolve once in the parent so parallel flavor builds share one version
+    # set and do not each download the same PyPI metadata.
+    resolve_python_tool_versions
     ensure_base_image_exists all
     if [[ "${AISB_BUILD_SEQUENTIAL:-0}" == "1" ]]; then
       build_all_sequential

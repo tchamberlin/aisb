@@ -61,7 +61,8 @@ aisb-build --no-cache       # rebuild without the podman layer cache
 AISB_BUILD_SEQUENTIAL=1 aisb-build all
 ```
 
-Requires: `podman`, `bash`, `npm` (for version-pin lookups in `build-containers`).
+Requires: `podman`, `bash`, `curl`, `node`, and `npm` (for version-pin lookups
+in `build-containers`).
 
 Add `~/.local/bin` to your `PATH` if it isn't already.
 
