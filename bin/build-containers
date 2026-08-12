@@ -118,45 +118,26 @@ WORKSPACE_ROOT="$(realpath "$WORKSPACE_ROOT")"
 WORKSPACE_HASH="$(aisb_sha1_10 "$WORKSPACE_ROOT")"
 aisb_load_repo_env "$WORKSPACE_ROOT"
 
-PENDING_REPO_BASE_IMAGE_PERSIST=0
-PENDING_REPO_BASE_IMAGE_PERSIST_DONE=0
-
-maybe_prompt_persist_repo_base_image() {
+# A project Containerfile already determines the base image: AISB_REPO_BASE_IMAGE
+# is the tag derived from it. Writing that same tag into .aisb.env as
+# AISB_BASE_IMAGE therefore cannot change which image is used -- but it does
+# change the mode. An explicit AISB_BASE_IMAGE means "the user owns the runtime",
+# which discards AISB_NPM_PACKAGES/AISB_PYTHON_TOOLS and warns on every run that
+# the Containerfile is unused.
+#
+# This used to be offered as "persist this choice", which invited people to opt
+# into a different mode believing they were saving the current one. There is no
+# choice to persist here, so just report what is being used.
+announce_repo_base_image() {
   [[ -z "${BASE_IMAGE:-}" ]] || return 0
   [[ -n "${AISB_REPO_CONTAINERFILE:-}" ]] || return 0
   [[ "${AISB_REPO_ENV_HAS_BASE_IMAGE:-0}" != "1" ]] || return 0
 
-  local env_file="$AISB_REPO_ENV_FILE"
-  local action="Create"
-  if [[ -f "$env_file" ]]; then
-    action="Update"
-  fi
-
-  if [[ ! -t 0 || ! -t 1 ]]; then
-    echo "Detected project Containerfile: $AISB_REPO_CONTAINERFILE"
-    echo "Using repo base image: $AISB_REPO_BASE_IMAGE"
-    echo "To persist this choice, add AISB_BASE_IMAGE=$AISB_REPO_BASE_IMAGE to $env_file"
-    return 0
-  fi
-
-  local reply
-  printf 'Detected project Containerfile: %s\n' "$AISB_REPO_CONTAINERFILE"
-  printf '%s %s with AISB_BASE_IMAGE=%s? [y/N] ' "$action" "$env_file" "$AISB_REPO_BASE_IMAGE"
-  read -r reply || reply=""
-  case "$reply" in
-    y|Y|yes|Yes|YES)
-      ;;
-    *)
-      echo "Using repo base image for this run: $AISB_REPO_BASE_IMAGE"
-      return 0
-      ;;
-  esac
-
-  PENDING_REPO_BASE_IMAGE_PERSIST=1
-  echo "Will write $env_file after base image '$AISB_REPO_BASE_IMAGE' is available."
+  echo "Detected project Containerfile: $AISB_REPO_CONTAINERFILE"
+  echo "Using repo base image: $AISB_REPO_BASE_IMAGE"
 }
 
-maybe_prompt_persist_repo_base_image
+announce_repo_base_image
 
 BASE_IMAGE_EXPLICIT=0
 if [[ -n "${BASE_IMAGE:-}" ]]; then
@@ -200,17 +181,6 @@ repo_base_is_generated() {
 repo_base_is_external_image() {
   [[ -n "${AISB_REPO_BASE_IMAGE:-}" && "$BASE_IMAGE_EXPLICIT" != "1" ]] \
     && ! repo_base_is_local_containerfile && ! repo_base_is_generated
-}
-
-persist_repo_base_image_if_requested() {
-  [[ "$PENDING_REPO_BASE_IMAGE_PERSIST" == "1" ]] || return 0
-  [[ "$PENDING_REPO_BASE_IMAGE_PERSIST_DONE" != "1" ]] || return 0
-  podman image exists "$AISB_REPO_BASE_IMAGE" || return 0
-
-  aisb_append_repo_base_image "$WORKSPACE_ROOT" "$AISB_REPO_BASE_IMAGE"
-  echo "Wrote $AISB_REPO_ENV_FILE"
-  AISB_REPO_ENV_HAS_BASE_IMAGE=1
-  PENDING_REPO_BASE_IMAGE_PERSIST_DONE=1
 }
 
 # Build the default localhost/aisb-base:latest if missing or stale. The generated
@@ -469,7 +439,6 @@ ensure_base_image_exists() {
 
   if podman image exists "$BASE_IMAGE_TAG"; then
     maybe_prompt_refresh_stale_base_image "$consumer"
-    persist_repo_base_image_if_requested
     return 0
   fi
 
@@ -481,7 +450,6 @@ ensure_base_image_exists() {
 
   echo "Base image '$BASE_IMAGE_TAG' not found; building it first."
   build_one base
-  persist_repo_base_image_if_requested
 }
 
 build_one() {
@@ -628,10 +596,6 @@ build_one() {
     -t "$tag" \
     -f "$containerfile" \
     "$build_context"
-
-  if [[ "$flavor" == "base" ]]; then
-    persist_repo_base_image_if_requested
-  fi
 }
 
 build_all_sequential() {

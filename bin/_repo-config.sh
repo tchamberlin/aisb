@@ -243,7 +243,14 @@ aisb_load_repo_env() {
     # Same for a repo Containerfile: the pin wins, and the Containerfile is
     # never built or read. Say so -- silently ignoring it means edits to it
     # appear to do nothing, with no clue in the build log as to why.
-    if [[ -n "$AISB_REPO_CONTAINERFILE" ]]; then
+    #
+    # Unless the pin names the very tag the Containerfile would produce, in
+    # which case nothing is shadowed: aisb_repo_base_is_local_containerfile
+    # compares exactly these two values, so it still reports true and the base
+    # still builds from the Containerfile. Warning there sends people off to
+    # delete a line that was not causing their problem.
+    if [[ -n "$AISB_REPO_CONTAINERFILE" \
+      && "$AISB_REPO_BASE_IMAGE" != "$AISB_REPO_AUTO_BASE_IMAGE" ]]; then
       echo "warn: $AISB_REPO_CONTAINERFILE is not being used because AISB_BASE_IMAGE is set in $env_file" >&2
       echo "      remove AISB_BASE_IMAGE to build the base from that Containerfile instead" >&2
     fi
